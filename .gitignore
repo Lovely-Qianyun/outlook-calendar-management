@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+.outlook_cal_token.json
+.env
+
+.claude/
+.vscode/

@@ -1,0 +1,1061 @@
+"""ocal_events — 命令实现：status/list/add/update/read/delete/move/today/tomorrow/week/next/free。"""
+import html, re, json, sys, time
+from datetime import datetime, timedelta
+from urllib.parse import quote
+
+from ocal_errors import CalError
+from ocal_auth import get_token, TOKEN_PATH
+from ocal_time import LOCAL_TZ, LOCAL_TZ_NAME, _parse_dt, _parse_dt_arg, _all_day_range, _fmt, _weekday
+from ocal_graph import _call, _get_all
+from ocal_recurrence import _build_recurrence, _fmt_recurrence, _occurrence_number
+from ocal_i18n import t, d_md, date_weekday, all_day, join, range_sep, imp_name
+
+# ── 命令实现 ──────────────────────────────────────
+
+_EVENT_SELECT = "id,subject,start,end,location,categories,isAllDay,recurrence,seriesMasterId,type,isCancelled,bodyPreview"
+
+
+def _event_date_str(ev):
+    """事件落在哪一天，按当前语言格式化成显示串（如「08月10日 周一」/「08/10 Mon」）。
+
+    :param ev: Graph 事件对象
+    :return: 日历日显示串
+    """
+    s_tz = ev['start'].get('timeZone')
+    if ev.get('isAllDay'):
+        s, _ = _all_day_range(ev['start']['dateTime'], ev['end']['dateTime'])
+        return date_weekday(s)
+    s_bj = _parse_dt(ev['start']['dateTime'], s_tz)
+    return date_weekday(s_bj)
+
+
+def _print_events(events, title, summary=False):
+    """打印日程列表（list/today/next 共用的显示逻辑）。
+
+    :param events: 要显示的事件列表
+    :param title: 列表标题（如"接下来 7 天的安排"）
+    :param summary: True 时只按天汇总条数，不显示明细
+    """
+    if not events:
+        print(t("list_empty", title=title))
+        return
+    print(t("list_header", title=title))
+    if summary:
+        counts = {}
+        for ev in events:
+            d = _event_date_str(ev)
+            counts[d] = counts.get(d, 0) + 1
+        for d, n in counts.items():
+            print(t("list_count", d=d, n=n))
+        print()
+        return
+    last_date = ""
+    for ev in events:
+        s_tz = ev['start'].get('timeZone')
+        e_tz = ev['end'].get('timeZone')
+        is_all_day = ev.get('isAllDay', False)
+        if is_all_day:
+            s, e = _all_day_range(ev['start']['dateTime'], ev['end']['dateTime'])
+            date_str = date_weekday(s)
+            if e != s:
+                date_str += f" {range_sep()} {d_md(e)}"
+            time_str = all_day()
+            icon = "📌"
+        else:
+            s_bj = _parse_dt(ev['start']['dateTime'], s_tz)
+            date_str = date_weekday(s_bj)
+            time_str = f"{_fmt(ev['start']['dateTime'], s_tz)} - {_fmt(ev['end']['dateTime'], e_tz)}"
+            icon = "🕐"
+
+        cats = ev.get('categories', [])
+        cat_str = f" [{', '.join(cats)}]" if cats else ""
+
+        # 定期事件标记：区分系列主事件 / 单次出现 / 例外 / 已取消
+        rec_str = ""
+        if ev.get('seriesMasterId'):
+            if ev.get('isCancelled'):
+                rec_str = t("rec_cancelled")
+            elif ev.get('type') == 'exception':
+                rec_str = t("rec_modified")
+            else:
+                rec_str = t("rec_series")
+        elif ev.get('recurrence'):
+            rec_str = f" 🔁{_fmt_recurrence(ev['recurrence'])}"
+
+        if date_str != last_date:
+            print(f"  {date_str}")
+            last_date = date_str
+
+        print(f"    {icon} {time_str}  {ev['subject']}{rec_str}{cat_str}")
+        print(f"    🆔 {ev['id']}")
+    print()
+
+
+def _filter_events(events, search=None, category=None):
+    """在本地按关键词或类别过滤事件（Graph 拉回来之后再做）。
+
+    :param events: 事件列表
+    :param search: 关键词，匹配标题/地点/备注（不区分大小写）
+    :param category: 类别名，事件的 categories 里包含即算
+    :return: 过滤后的事件列表
+    """
+    if search:
+        search_l = search.lower()
+        filtered = []
+        for e in events:
+            if search_l in (e.get('subject') or '').lower():
+                filtered.append(e)
+                continue
+            loc = (e.get('location') or {}).get('displayName') or ''
+            if search_l in loc.lower():
+                filtered.append(e)
+                continue
+            if search_l in (e.get('bodyPreview') or '').lower():
+                filtered.append(e)
+        events = filtered
+    if category:
+        events = [e for e in events if category in e.get('categories', [])]
+    return events
+
+
+_IMPORTANCE_MAP = {"低": "low", "普通": "normal", "高": "high"}
+
+
+def _parse_importance(v):
+    """把命令行的重要度值归一成 Graph 的 importance。
+
+    用户既可能输"高"也可能输"high"，这里统一映射；其余值原样返回（交给 argparse 兜底）。
+
+    :param v: 用户输入的重要度
+    :return: Graph 用的 low/normal/high
+    """
+    return _IMPORTANCE_MAP.get(v, v)
+
+
+
+def cmd_status(args):
+    """查看连接状态：是否已认证、当前账户、登录剩余有效期。
+
+    :param args: argparse 参数（json 决定输出 JSON 还是人类文案）
+    :return: 0 正常；1 未连接或 API 异常
+    """
+    is_json = getattr(args, 'json', False)
+
+    def _expires_left():
+        """估一下 token 还剩多少秒有效；文件读不了就当不知道，返回 None。"""
+        try:
+            with open(TOKEN_PATH, 'r', encoding='utf-8') as f:
+                tok = json.load(f)
+            exp = tok.get('expires_at', 0)
+            if exp:
+                return exp - time.time()
+        except Exception:
+            pass
+        return None
+
+    token = get_token()
+    if not token:
+        if is_json:
+            print(json.dumps({"connected": False, "account": None, "expires_in_seconds": None},
+                             ensure_ascii=False))
+            return 1
+        print(t("status_not_connected"))
+        print(t("status_run_setup"))
+        return 1
+    try:
+        data = _call("GET", "/me/calendar", token)
+    except CalError as e:
+        if is_json:
+            print(json.dumps({"connected": False, "account": None,
+                              "expires_in_seconds": _expires_left()}, ensure_ascii=False))
+            return 1
+        print(t("status_api_error", e=e))
+        return 1
+    account = data.get('owner', {}).get('address', data.get('name', ''))
+    exp_left = _expires_left()
+    if is_json:
+        print(json.dumps({"connected": True, "account": account, "expires_in_seconds": exp_left},
+                         ensure_ascii=False))
+        return 0
+    print(t("status_connected"))
+    print(f"   {account}")
+    if exp_left is not None:
+        if exp_left > 0:
+            print(t("status_expiry", h=int(exp_left // 3600), m=int((exp_left % 3600) // 60)))
+        else:
+            print(t("status_expired_auto"))
+    return 0
+
+
+def cmd_list(args):
+    """查一段时间的日程（list 主命令，today/tomorrow/week 也复用）。
+
+    :param args: argparse 参数（days/past/search/category/summary/from/created-after/reminders/json）
+    :return: 0 成功
+    """
+    is_json = getattr(args, 'json', False)
+    token = get_token()
+    if not token:
+        raise CalError(t("err_auth_first"))
+
+    days = getattr(args, 'days', 7) or 7
+    past = getattr(args, 'past', 0) or 0
+    search = getattr(args, 'search', None)
+    category = getattr(args, 'category', None)
+    summary = bool(getattr(args, 'summary', False))
+    from_date = getattr(args, 'from_date', None)
+    created_after = getattr(args, 'created_after', None)
+    reminders_only = bool(getattr(args, 'reminders', False))
+
+    if from_date:
+        # --from：从指定日期当天本地 00:00 起算，past 忽略
+        fd = _parse_dt_arg(from_date, date_only=True)  # 格式错误抛 CalError
+        start = (fd.replace(hour=0, minute=0, second=0, microsecond=0)
+                 .replace(tzinfo=LOCAL_TZ).isoformat(timespec="seconds"))
+        end = ((fd + timedelta(days=days)).replace(hour=23, minute=59, second=59, microsecond=0)
+               .replace(tzinfo=LOCAL_TZ).isoformat(timespec="seconds"))
+        title = t("title_from", d=fd.strftime('%Y-%m-%d'), n=days)
+    else:
+        now = datetime.now(LOCAL_TZ)
+        # aware 的 isoformat 自带本地偏移（如 +08:00），quote 编码后按本地时区查询，
+        # 不再被 Graph 当作 UTC 解析（否则每天 0:00-8:00 的日程会被漏掉）
+        start = (now - timedelta(days=past)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
+        end = (now + timedelta(days=days)).replace(hour=23, minute=59, second=59, microsecond=0).isoformat(timespec="seconds")
+        if past > 0:
+            title = t("title_range", p=past, n=days)
+        else:
+            title = t("title_next", n=days)
+    if created_after:
+        # 按「添加时间」筛选（回答"我昨天加的"这类查询）。
+        # calendarView 不支持 createdDateTime 过滤，改用 events 端点（系列显示主事件，语义一致）
+        ca = _parse_dt_arg(created_after, date_only=True)  # 格式错误抛 CalError
+        ca_iso = (ca.replace(tzinfo=LOCAL_TZ)).isoformat(timespec="seconds")
+        url = (f"/me/events?$filter=createdDateTime ge {quote(ca_iso, safe='')}"
+               f"&$select={_EVENT_SELECT}&$orderby=createdDateTime desc")
+        title = t("title_created", d=ca.strftime('%Y-%m-%d'))
+    else:
+        url = (f"/me/calendar/calendarView?startDateTime={quote(start, safe='')}&endDateTime={quote(end, safe='')}"
+               f"&$select={_EVENT_SELECT},reminderMinutesBeforeStart,isReminderOn&$orderby=start/dateTime")
+    events = _get_all(url, token, prefer_immutable=True)
+
+    # 本地筛选
+    filtered = _filter_events(events, search, category)
+    if reminders_only:
+        # 只看设了提醒的日程（isReminderOn 为 True 且设置了提醒时间）
+        filtered = [e for e in filtered if e.get('isReminderOn') and e.get('reminderMinutesBeforeStart') is not None]
+        title += t("suffix_reminders")
+
+    if is_json:
+        # 机器可读：原始事件 dict 数组（无匹配时输出 []），跳过人类展示
+        print(json.dumps(filtered, ensure_ascii=False))
+        return 0
+
+    if search or category:
+        conds = []
+        if search:
+            conds.append(t("filter_contains", s=search))
+        if category:
+            conds.append(t("filter_category", c=category))
+        title += t("filter_suffix", c=t("filter_join").join(conds))
+        if not filtered:
+            print(t("list_no_match", n=len(events), title=title))
+            return 0
+
+    _print_events(filtered, title, summary=summary)
+    return 0
+
+
+def _overlaps(a_s, a_e, b_s, b_e):
+    """两个时段有没有重叠（naive datetime；只是首尾相接不算）。
+
+    :param a_s: 时段 a 的开始
+    :param a_e: 时段 a 的结束
+    :param b_s: 时段 b 的开始
+    :param b_e: 时段 b 的结束
+    :return: True 有重叠
+    """
+    return a_s < b_e and b_s < a_e
+
+
+def _check_conflicts(token, start_dt, end_dt, all_day):
+    """查新日程会跟哪些现有日程重叠（add 时非 --force 调用）。
+
+    查询窗口：时段事件前后各扩 1 小时，全天事件查当天整天（本地 naive）。
+    showAs=free 的日程不算占用；定期系列只检查首次出现（start 起 14 天内）。
+
+    :param token: 访问令牌
+    :param start_dt: 新日程开始（naive）
+    :param end_dt: 新日程结束（naive）
+    :param all_day: 新日程是否全天
+    :return: [(事件, 占用开始, 占用结束, 是否系列), ...]
+    """
+    if all_day:
+        q_start = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        q_end = q_start + timedelta(days=1)
+    else:
+        q_start = start_dt - timedelta(hours=1)
+        q_end = end_dt + timedelta(hours=1)
+    start_iso = q_start.replace(tzinfo=LOCAL_TZ).isoformat(timespec="seconds")
+    end_iso = q_end.replace(tzinfo=LOCAL_TZ).isoformat(timespec="seconds")
+    url = (f"/me/calendar/calendarView?startDateTime={quote(start_iso, safe='')}&endDateTime={quote(end_iso, safe='')}"
+           f"&$select={_EVENT_SELECT},showAs&$orderby=start/dateTime")
+    events = _get_all(url, token, prefer_immutable=True)
+    result = []
+    for ev in events:
+        if ev.get('showAs') == 'free':
+            continue  # 标记为 free 的不算占用
+        if ev.get('isAllDay'):
+            s, e = _all_day_range(ev['start']['dateTime'], ev['end']['dateTime'])
+            b_s = datetime.combine(s, datetime.min.time())
+            b_e = b_s + timedelta(days=(e - s).days + 1)
+        else:
+            b_s = _parse_dt(ev['start']['dateTime'], ev['start'].get('timeZone')).replace(tzinfo=None)
+            b_e = _parse_dt(ev['end']['dateTime'], ev['end'].get('timeZone')).replace(tzinfo=None)
+        is_series = bool(ev.get('recurrence') or ev.get('seriesMasterId'))
+        if is_series:
+            b_e = min(b_e, b_s + timedelta(days=14))  # 只检查首次出现窗口
+        if _overlaps(start_dt, end_dt, b_s, b_e):
+            result.append((ev, b_s, b_e, is_series))
+    return result
+
+
+def cmd_add(args):
+    """新建日程（会议/生日/提醒/定期），默认检查重叠（--force 跳过）。
+
+    :param args: argparse 参数（subject/start/end/all-day/location/body/category/remind/repeat/...）
+    :return: 0 成功
+    """
+    is_json = getattr(args, 'json', False)
+    token = get_token()
+    if not token:
+        raise CalError(t("err_auth_first"))
+
+    # 未显式 --all-day 且开始时间只有日期 → 自动按全天处理
+    if not args.all_day and args.start and " " not in args.start:
+        args.all_day = True
+        print(t("add_allday_hint"), file=sys.stderr if is_json else sys.stdout)
+
+    if args.all_day:
+        start_dt = _parse_dt_arg(args.start, date_only=True)
+        end_dt = start_dt + timedelta(days=1)
+        event_data = {
+            "subject": args.subject,
+            "start": {"dateTime": start_dt.strftime("%Y-%m-%dT00:00:00"), "timeZone": LOCAL_TZ_NAME},
+            "end": {"dateTime": end_dt.strftime("%Y-%m-%dT00:00:00"), "timeZone": LOCAL_TZ_NAME},
+            "isAllDay": True,
+        }
+        time_desc = f"{d_md(start_dt)} {all_day()}"
+    else:
+        start_dt = _parse_dt_arg(args.start)
+        if args.end:
+            end_dt = _parse_dt_arg(args.end)
+        else:
+            end_dt = start_dt + timedelta(hours=1)  # 未给结束时间 → 默认 1 小时
+        if end_dt <= start_dt:
+            raise CalError(t("err_end_after_start"))
+        event_data = {
+            "subject": args.subject,
+            "start": {"dateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": LOCAL_TZ_NAME},
+            "end": {"dateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": LOCAL_TZ_NAME},
+        }
+        time_desc = f"{d_md(start_dt)} {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
+
+    if args.location:
+        event_data["location"] = {"displayName": args.location}
+    if args.body:
+        event_data["body"] = {"contentType": "text", "content": args.body}
+    if args.category:
+        event_data["categories"] = [c.strip() for c in args.category.split(",") if c.strip()]
+    if args.importance:
+        imp = _parse_importance(args.importance)
+        if imp in ("low", "normal", "high"):
+            event_data["importance"] = imp
+    if args.private:
+        event_data["sensitivity"] = "private"
+    if args.busy:
+        event_data["showAs"] = args.busy
+
+    # 定期事件
+    recurrence_desc = ""
+    if args.repeat:
+        recurrence, recurrence_desc = _build_recurrence(args.repeat, args.repeat_until, args.repeat_times, start_dt)
+        event_data["recurrence"] = recurrence
+    elif args.repeat_until is not None or args.repeat_times is not None:
+        raise CalError(t("err_repeat_until"))
+
+    if args.remind is not None:
+        if args.remind < 0:
+            raise CalError(t("err_remind_negative"))
+        if args.all_day:
+            # 全天事件：提醒按分钟数（天数 × 1440），上限 2629800 分钟（约 5 年）
+            minutes = args.remind * 1440
+            if minutes > 2629800:
+                raise CalError(t("err_allday_remind_max", n=2629800 // 1440, m=args.remind))
+            event_data["reminderMinutesBeforeStart"] = minutes
+            remind_desc = t("remind_days", n=args.remind)
+        else:
+            event_data["reminderMinutesBeforeStart"] = args.remind
+            remind_desc = t("remind_minutes", n=args.remind)
+
+    # 冲突检测：--force 跳过；只提示不阻断（--json 时走 stderr，stdout 保持纯净）
+    if not getattr(args, 'force', False):
+        overlaps = _check_conflicts(token, start_dt, end_dt, args.all_day)
+        if overlaps:
+            _err = sys.stderr if is_json else sys.stdout
+            print(t("conflict_header"), file=_err)
+            for ev, _, _, is_series in overlaps:
+                note = t("conflict_series_note") if is_series else ""
+                if ev.get('isAllDay'):
+                    s, e = _all_day_range(ev['start']['dateTime'], ev['end']['dateTime'])
+                    t_str = f"{d_md(s)} {all_day()}"
+                    if e != s:
+                        t_str += f" {range_sep()} {d_md(e)}"
+                else:
+                    t_str = f"{_fmt(ev['start']['dateTime'], ev['start'].get('timeZone'))} - {_fmt(ev['end']['dateTime'], ev['end'].get('timeZone'))}"
+                print(f"   {ev['subject']}  {t_str}  🆔 {ev['id']}{note}", file=_err)
+            print(file=_err)
+
+    result = _call("POST", "/me/events", token, event_data, prefer_immutable=True)
+    if is_json:
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    print(t("add_success"))
+    print(f"   {result['subject']}")
+    print(f"   🆔 {result['id']}")
+    print(f"   {time_desc}")
+    if recurrence_desc:
+        print(f"   🔁 {recurrence_desc}")
+    if args.category:
+        print(f"   🏷️ {result.get('categories', [])}")
+    if args.remind is not None:
+        print(f"   ⏰ {remind_desc}")
+    if args.importance:
+        print(t("importance_line", v=args.importance))
+    if args.private:
+        print(t("private_line"))
+    if args.busy:
+        print(t("showas_line", v=args.busy))
+    if args.location:
+        print(f"   📍 {args.location}")
+    if args.body:
+        print(f"   📝 {args.body}")
+    print()
+    return 0
+
+
+def cmd_update(args):
+    """更新已有日程：标题/时间/地点/备注/类别/重要度/私密/忙闲/提醒/重复规则，支持全天<->时段互转。
+
+    :param args: argparse 参数（event_id + 各 --xx 字段；-y 跳过确认）
+    :return: 0 成功；1 没有可改的字段或用户取消
+    """
+    is_json = getattr(args, 'json', False)
+    token = get_token()
+    if not token:
+        raise CalError(t("err_auth_first"))
+    if not args.event_id:
+        raise CalError(t("err_id_required"))
+
+    # 读取原事件
+    data = _call("GET", f"/me/events/{quote(args.event_id, safe='')}", token, prefer_immutable=True)
+    was_all_day = data.get('isAllDay', False)
+
+    # 收集要修改的字段
+    changes = []
+    patch = {}
+
+    if args.subject is not None:
+        patch["subject"] = args.subject
+        changes.append(t("ch_subject"))
+
+    if args.all_day is not None:
+        # --all-day / --no-all-day 显式切换类型
+        target_all_day = args.all_day
+    else:
+        target_all_day = was_all_day
+
+    if args.start or args.end or args.all_day is not None:
+        if target_all_day:
+            # 全天：start 是日期（原全天事件的日期按 naive 日期段取，避免 UTC 换算错一天）
+            if args.start:
+                start_dt = _parse_dt_arg(args.start, date_only=True)
+            else:
+                start_dt = datetime.strptime(data['start']['dateTime'][:10], "%Y-%m-%d")
+            end_dt = start_dt + timedelta(days=1)
+            patch["start"] = {"dateTime": start_dt.strftime("%Y-%m-%dT00:00:00"), "timeZone": LOCAL_TZ_NAME}
+            patch["end"] = {"dateTime": end_dt.strftime("%Y-%m-%dT00:00:00"), "timeZone": LOCAL_TZ_NAME}
+            patch["isAllDay"] = True
+            changes.append(t("ch_allday_date"))
+        else:
+            # 时段：start/end 是 "日期 时间"
+            if args.start:
+                start_dt = _parse_dt_arg(args.start)
+            else:
+                start_dt = _parse_dt(data['start']['dateTime'], data['start'].get('timeZone')).replace(tzinfo=None)
+            if args.end:
+                end_dt = _parse_dt_arg(args.end)
+            elif was_all_day:
+                # 原全天转时段且未给结束时间 → 默认 1 小时（原全天 end 是次日零点，直接沿用会产生超长事件）
+                end_dt = start_dt + timedelta(hours=1)
+            else:
+                end_dt = _parse_dt(data['end']['dateTime'], data['end'].get('timeZone')).replace(tzinfo=None)
+            if end_dt <= start_dt:
+                raise CalError(t("err_end_after_start"))
+            patch["start"] = {"dateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": LOCAL_TZ_NAME}
+            patch["end"] = {"dateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": LOCAL_TZ_NAME}
+            patch["isAllDay"] = False
+            changes.append(t("ch_time"))
+
+    if args.location is not None:
+        patch["location"] = {"displayName": args.location}
+        changes.append(t("ch_location"))
+    if args.body is not None:
+        patch["body"] = {"contentType": "text", "content": args.body}
+        changes.append(t("ch_body"))
+
+    # 类别（--category "" 清空）
+    if args.category is not None:
+        patch["categories"] = [c.strip() for c in args.category.split(",") if c.strip()]
+        changes.append(t("ch_category"))
+
+    # 重要度
+    if args.importance:
+        imp = _parse_importance(args.importance)
+        if imp in ("low", "normal", "high"):
+            patch["importance"] = imp
+            changes.append(t("ch_importance"))
+
+    # 私密（--private / --no-private 显式切换；均未给则不修改）
+    if args.private is not None:
+        patch["sensitivity"] = "private" if args.private else "normal"
+        changes.append(t("ch_private"))
+
+    # 忙闲
+    if args.busy:
+        patch["showAs"] = args.busy
+        changes.append(t("ch_busy"))
+
+    # 提醒（--no-remind 优先于 --remind：关闭提醒）
+    # 注意：Graph 对 reminderMinutesBeforeStart 的 null PATCH 会忽略，且 null+isReminderOn 组合报 500；
+    # 有效做法是单独 PATCH isReminderOn:false（reminderMinutesBeforeStart 数值残留但不再提醒）。
+    if args.no_remind:
+        patch["isReminderOn"] = False
+        changes.append(t("ch_reminder"))
+    elif args.remind is not None:
+        if args.remind < 0:
+            raise CalError(t("err_remind_negative"))
+        if data.get('isAllDay') or args.all_day is True:
+            # 全天事件：N 语义 = 天数（×1440），上限 2629800 分钟（约 5 年）
+            minutes = args.remind * 1440
+            if minutes > 2629800:
+                raise CalError(t("err_allday_remind_max", n=2629800 // 1440, m=args.remind))
+            patch["reminderMinutesBeforeStart"] = minutes
+            changes.append(t("ch_reminder"))
+        else:
+            patch["reminderMinutesBeforeStart"] = args.remind
+            changes.append(t("ch_reminder"))
+
+    # 重复规则
+    if args.repeat is not None or args.repeat_until or args.repeat_times:
+        # 守卫：定期系列的单次出现不可修改系列规则
+        if data.get('seriesMasterId'):
+            raise CalError(t("err_series_rule"))
+        if args.repeat is None:
+            raise CalError(t("err_repeat_until"))
+        if args.repeat == "":
+            # 解除定期
+            patch["recurrence"] = None
+            changes.append(t("ch_recurrence"))
+            print(t("warn_repeat_removed"), file=sys.stderr if is_json else sys.stdout)
+        else:
+            start_date = datetime.strptime(data['start']['dateTime'][:10], "%Y-%m-%d")
+            recurrence, _ = _build_recurrence(args.repeat, args.repeat_until, args.repeat_times, start_date)
+            patch["recurrence"] = recurrence
+            changes.append(t("ch_recurrence"))
+            print(t("warn_repeat_reset"), file=sys.stderr if is_json else sys.stdout)
+
+    if not patch:
+        print(t("warn_nothing_to_update"), file=sys.stderr if is_json else sys.stdout)
+        return 1
+
+    # 幂等确认：--yes 或 --json 跳过确认
+    if not getattr(args, 'yes', False) and not is_json:
+        if data.get('seriesMasterId'):
+            print(t("warn_occurrence_only"))
+        print(t("confirm_update", s=data['subject'], changes=", ".join(changes)))
+        print(t("confirm_prompt"), end="", flush=True)
+        try:
+            ans = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print(t("cancel_eof"))
+            return 1
+        if ans not in ("y", "yes"):
+            print(t("cancel"))
+            return 1
+
+    result = _call("PATCH", f"/me/events/{quote(args.event_id, safe='')}", token, patch, prefer_immutable=True)
+    if is_json:
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    print(t("update_success"))
+    print(f"   {result['subject']}")
+    s_tz = result['start'].get('timeZone')
+    e_tz = result['end'].get('timeZone')
+    if result.get('isAllDay'):
+        s, _ = _all_day_range(result['start']['dateTime'], result['end']['dateTime'])
+        print(t("date_all_day", d=d_md(s)))
+    else:
+        print(f"   🕐 {_fmt(result['start']['dateTime'], s_tz)} - {_fmt(result['end']['dateTime'], e_tz)}")
+    print()
+    return 0
+
+
+def cmd_read(args):
+    """看一个日程的完整详情；定期系列的某一次会附带系列上下文。
+
+    :param args: argparse 参数（event_id/json）
+    :return: 0 成功
+    """
+    is_json = getattr(args, 'json', False)
+    token = get_token()
+    if not token:
+        raise CalError(t("err_auth_first"))
+    if not args.event_id:
+        raise CalError(t("err_id_required"))
+
+    data = _call("GET", f"/me/events/{quote(args.event_id, safe='')}", token, prefer_immutable=True)
+    if is_json:
+        print(json.dumps(data, ensure_ascii=False))
+        return 0
+
+    print(f"\n📋 {data['subject']}")
+    print(f"🆔 {data['id']}")
+    print("─" * 40)
+
+    s_tz = data['start'].get('timeZone')
+    e_tz = data['end'].get('timeZone')
+    if data.get('isAllDay'):
+        s, e = _all_day_range(data['start']['dateTime'], data['end']['dateTime'])
+        if e == s:
+            print(f"📅 {date_weekday(s, with_year=True)} {all_day()}")
+        else:
+            print(f"📅 {d_md(s)} {range_sep()} {d_md(e)}  {all_day()}")
+    else:
+        print(f"🕐 {_fmt(data['start']['dateTime'], s_tz)} - {_fmt(data['end']['dateTime'], e_tz)}")
+        print(f"   {_weekday(data['start']['dateTime'], s_tz)}")
+
+    loc = data.get('location', {}).get('displayName', '')
+    if loc:
+        print(f"📍 {loc}")
+
+    created = data.get('createdDateTime')
+    if created:
+        print(t("read_added", t=_fmt(created)))
+
+    org = (data.get('organizer') or {}).get('emailAddress', {}).get('address', '')
+    if org:
+        print(t("read_organizer", a=org))
+
+    cats = data.get('categories', [])
+    if cats:
+        print(f"🏷️ {', '.join(cats)}")
+
+    if data.get('recurrence'):
+        print(f"🔁 {_fmt_recurrence(data['recurrence'])}")
+
+    # 定期系列单次出现的上下文
+    master_id = data.get('seriesMasterId')
+    if master_id:
+        try:
+            master = _call("GET", f"/me/events/{quote(master_id, safe='')}", token, prefer_immutable=True)
+            rec = _fmt_recurrence(master.get('recurrence'))
+            print(t("read_series", s=master.get('subject', ''), rec=rec))
+            n = _occurrence_number(master.get('recurrence'), data['start']['dateTime'])
+            if n:
+                print(t("read_occ_num", n=n))
+            print(t("read_master_id", id=master_id))
+        except CalError:
+            print(t("read_series_fail"))
+
+    imp = data.get('importance')
+    if imp and imp != 'normal':
+        print(t("read_importance", v=imp_name(imp)))
+
+    if data.get('sensitivity') == 'private':
+        print(t("read_private"))
+
+    show = data.get('showAs')
+    if show and show != 'busy':
+        print(t("read_showas", v=show))
+
+    body = data.get('body', {}).get('content', '')
+    if body:
+        clean = html.unescape(re.sub(r'<[^>]+>', '', body)).replace("\xa0", " ").strip()
+        if clean:
+            print(f"📝 {clean}")
+
+    wl = data.get('webLink')
+    if wl:
+        print(f"🔗 {wl}")
+    print()
+    return 0
+
+
+def cmd_delete(args):
+    """删日程；定期日程默认只删本次，--series 或交互选择可删整个系列。
+
+    :param args: argparse 参数（event_id/-y/--series/json）
+    :return: 0 成功；1 用户取消
+    """
+    is_json = getattr(args, 'json', False)
+    token = get_token()
+    if not token:
+        raise CalError(t("err_auth_first"))
+    if not args.event_id:
+        raise CalError(t("err_id_required"))
+
+    data = _call("GET", f"/me/events/{quote(args.event_id, safe='')}", token, prefer_immutable=True)
+    master_id = data.get('seriesMasterId')
+    is_master = data.get('recurrence') is not None
+
+    # 确定删除目标：单次出现（默认）还是整个系列
+    target_id = args.event_id
+    if master_id:
+        if args.series:
+            target_id = master_id
+        elif not args.yes and not is_json:
+            # 交互选择；-y 时默认最小破坏：仅删本次（--json 同 -y 语义）
+            print(t("warn_occ_of_series", s=data['subject']))
+            print(t("delete_choice"))
+            try:
+                ans = input(t("delete_prompt")).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print(t("cancel_eof_delete"))
+                return 1
+            if ans in ("2", "系列", "s", "series"):
+                target_id = master_id
+    deleting_series = target_id != args.event_id or is_master
+
+    # 确认（--yes 或 --json 跳过）
+    if not getattr(args, 'yes', False) and not is_json:
+        if deleting_series:
+            print(t("warn_series_all"))
+        print(t("confirm_delete", s=data['subject']))
+        print(t("confirm_prompt"), end="", flush=True)
+        try:
+            ans = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print(t("cancel_eof"))
+            return 1
+        if ans not in ("y", "yes"):
+            print(t("cancel"))
+            return 1
+
+    _call("DELETE", f"/me/events/{quote(target_id, safe='')}", token, prefer_immutable=True)
+    if is_json:
+        print(json.dumps({"deleted": target_id, "subject": data['subject'], "series": deleting_series},
+                         ensure_ascii=False))
+        return 0
+    if deleting_series:
+        print(t("deleted_series", s=data['subject']))
+    else:
+        print(t("deleted_occurrence", s=data['subject']))
+    return 0
+
+
+# ── move：移动日程（按天数平移 或 移到目标日期，保留时段/时长）──
+
+def cmd_move(args):
+    """把日程按天数平移（--days）或挪到某天（--to），时段和时长不变。
+
+    :param args: argparse 参数（event_id/--days/--to/-y/json）
+    :return: 0 成功；1 用户取消
+    """
+    is_json = getattr(args, 'json', False)
+    token = get_token()
+    if not token:
+        raise CalError(t("err_auth_first"))
+    if not args.event_id:
+        raise CalError(t("err_id_required"))
+    if args.days is not None and args.to is not None:
+        raise CalError(t("err_days_to"))
+    if args.days is None and args.to is None:
+        raise CalError(t("err_move_args"))
+    if args.days == 0:
+        raise CalError(t("err_move_zero"))
+
+    data = _call("GET", f"/me/events/{quote(args.event_id, safe='')}", token, prefer_immutable=True)
+
+    # 计算新起止：保留原时段与时长，只移动日期
+    if data.get('isAllDay'):
+        s, e = _all_day_range(data['start']['dateTime'], data['end']['dateTime'])
+        if args.days is not None:
+            ns, ne = s + timedelta(days=args.days), e + timedelta(days=args.days)
+        else:
+            target = _parse_dt_arg(args.to, date_only=True).date()
+            ns, ne = s + timedelta(days=(target - s).days), e + timedelta(days=(target - s).days)
+        patch = {
+            "start": {"dateTime": ns.strftime("%Y-%m-%dT00:00:00"), "timeZone": LOCAL_TZ_NAME},
+            "end": {"dateTime": (ne + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00"), "timeZone": LOCAL_TZ_NAME},
+        }
+    else:
+        s_dt = _parse_dt(data['start']['dateTime'], data['start'].get('timeZone')).replace(tzinfo=None)
+        e_dt = _parse_dt(data['end']['dateTime'], data['end'].get('timeZone')).replace(tzinfo=None)
+        if args.days is not None:
+            ns, ne = s_dt + timedelta(days=args.days), e_dt + timedelta(days=args.days)
+        else:
+            target = _parse_dt_arg(args.to, date_only=True)
+            delta = (target.date() - s_dt.date()).days
+            ns, ne = s_dt + timedelta(days=delta), e_dt + timedelta(days=delta)
+        patch = {
+            "start": {"dateTime": ns.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": LOCAL_TZ_NAME},
+            "end": {"dateTime": ne.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": LOCAL_TZ_NAME},
+        }
+
+    # 系列提示
+    if data.get('recurrence'):
+        print(t("warn_move_series"))
+    elif data.get('seriesMasterId'):
+        print(t("warn_move_occ"))
+
+    # 确认（--json 视为 -y；非交互 EOF 取消）
+    if not is_json and not getattr(args, 'yes', False):
+        if data.get('isAllDay'):
+            target_range = f"{d_md(ns)}{t('move_allday_suffix')}"
+        else:
+            target_range = f"{d_md(ns)} {ns.strftime('%H:%M')} - {ne.strftime('%H:%M')}"
+        print(t("confirm_move", s=data['subject'], range=target_range))
+        print(t("confirm_prompt"), end="", flush=True)
+        try:
+            ans = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print(t("cancel_eof"))
+            return 1
+        if ans not in ("y", "yes"):
+            print(t("cancel"))
+            return 1
+
+    result = _call("PATCH", f"/me/events/{quote(args.event_id, safe='')}", token, patch, prefer_immutable=True)
+    if is_json:
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        print(t("move_success"))
+        print(f"   {result['subject']}")
+        s_tz = result['start'].get('timeZone')
+        e_tz = result['end'].get('timeZone')
+        if result.get('isAllDay'):
+            s2, _ = _all_day_range(result['start']['dateTime'], result['end']['dateTime'])
+            print(t("date_all_day", d=d_md(s2)))
+        else:
+            print(f"   🕐 {_fmt(result['start']['dateTime'], s_tz)} - {_fmt(result['end']['dateTime'], e_tz)}")
+        print()
+    return 0
+
+
+# ── today / tomorrow / week：薄包装 cmd_list ──
+
+def cmd_today(args):
+    """今天的安排（复用 cmd_list，固定 from=今天、1 天）。
+
+    :param args: 会被就地改造成 list 参数再传给 cmd_list
+    :return: cmd_list 的返回值
+    """
+    setattr(args, 'from_date', datetime.now(LOCAL_TZ).strftime("%Y-%m-%d"))
+    setattr(args, 'days', 1)
+    setattr(args, 'past', 0)
+    return cmd_list(args)
+
+
+def cmd_tomorrow(args):
+    """明天的安排（复用 cmd_list，固定 from=明天、1 天）。
+
+    :param args: 会被就地改造成 list 参数再传给 cmd_list
+    :return: cmd_list 的返回值
+    """
+    setattr(args, 'from_date', (datetime.now(LOCAL_TZ) + timedelta(days=1)).strftime("%Y-%m-%d"))
+    setattr(args, 'days', 1)
+    setattr(args, 'past', 0)
+    return cmd_list(args)
+
+
+def cmd_week(args):
+    """今天起 7 天的安排（复用 cmd_list，固定 from=今天、7 天）。
+
+    :param args: 会被就地改造成 list 参数再传给 cmd_list
+    :return: cmd_list 的返回值
+    """
+    setattr(args, 'from_date', datetime.now(LOCAL_TZ).strftime("%Y-%m-%d"))
+    setattr(args, 'days', 7)
+    setattr(args, 'past', 0)
+    return cmd_list(args)
+
+
+# ── next：定期系列下次出现 ──
+
+def cmd_next(args):
+    """定期系列的下次出现（未来 365 天内最近一次）。
+
+    :param args: argparse 参数（event_id/json）
+    :return: 0 成功
+    """
+    is_json = getattr(args, 'json', False)
+    token = get_token()
+    if not token:
+        raise CalError(t("err_auth_first"))
+    if not args.event_id:
+        raise CalError(t("err_id_required"))
+
+    data = _call("GET", f"/me/events/{quote(args.event_id, safe='')}", token, prefer_immutable=True)
+    if data.get('seriesMasterId'):
+        master_id = data['seriesMasterId']
+    elif data.get('recurrence'):
+        master_id = data['id']
+    else:
+        raise CalError(t("err_not_recurring"))
+
+    now = datetime.now(LOCAL_TZ)
+    now_iso = now.isoformat(timespec="seconds")
+    end_iso = (now + timedelta(days=365)).isoformat(timespec="seconds")
+    url = (f"/me/events/{quote(master_id, safe='')}/instances?startDateTime={quote(now_iso, safe='')}"
+           f"&endDateTime={quote(end_iso, safe='')}"
+           f"&$select={_EVENT_SELECT}&$top=1&$orderby=start/dateTime")
+    instances = _get_all(url, token, prefer_immutable=True)
+    instances = instances[:1]  # Graph /instances 端点不支持 $top，本地截断取最近一次
+    if instances:
+        if is_json:
+            print(json.dumps(instances, ensure_ascii=False))
+        else:
+            _print_events(instances, t("next_title"))
+    else:
+        if is_json:
+            print(json.dumps({"ended": True}, ensure_ascii=False))
+        else:
+            print(t("next_ended"))
+    return 0
+
+
+# ── free：空闲时段（本地计算）──
+
+def _compute_free_slots(events, day, from_min, to_min):
+    """算某天从 from_min 到 to_min 之间的空闲时段（纯计算，不碰外部状态）。
+
+    占用 = showAs != 'free' 的事件：全天占整天，时段按实际起止算，
+    跨出查询窗口的部分只算窗口内；相邻的空闲段会合并。
+
+    :param events: 当天的事件列表
+    :param day: 要查的日期（date 对象）
+    :param from_min: 窗口起点（当天第几分钟）
+    :param to_min: 窗口终点（当天第几分钟）
+    :return: [(开始, 结束), ...]，naive datetime，已合并相邻
+    """
+    day_start = datetime.combine(day, datetime.min.time())
+    win_start = day_start + timedelta(minutes=from_min)
+    win_end = day_start + timedelta(minutes=to_min)
+    busy = []
+    for ev in events:
+        if ev.get('showAs') == 'free':
+            continue  # 标记为 free 的不算占用
+        if ev.get('isAllDay'):
+            s, e = _all_day_range(ev['start']['dateTime'], ev['end']['dateTime'])
+            b_s = datetime.combine(s, datetime.min.time())
+            b_e = b_s + timedelta(days=(e - s).days + 1)
+        else:
+            b_s = _parse_dt(ev['start']['dateTime'], ev['start'].get('timeZone')).replace(tzinfo=None)
+            b_e = _parse_dt(ev['end']['dateTime'], ev['end'].get('timeZone')).replace(tzinfo=None)
+        s = max(b_s, win_start)
+        e = min(b_e, win_end)
+        if s < e:
+            busy.append((s, e))
+    busy.sort()
+    # 合并相邻/重叠占用
+    merged = []
+    for s, e in busy:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    # 占用区间的补集即空闲
+    free = []
+    cur = win_start
+    for s, e in merged:
+        if cur < s:
+            free.append((cur, s))
+        cur = max(cur, e)
+    if cur < win_end:
+        free.append((cur, win_end))
+    return free
+
+
+def _format_free_day(day, free, from_min, to_min):
+    """把一天的空闲结果拼成显示行（如「📅 08月10日 周一：09:00-10:00 空闲」）。
+
+    :param day: 日期
+    :param free: _compute_free_slots 的结果
+    :param from_min: 窗口起点（分钟）
+    :param to_min: 窗口终点（分钟）
+    :return: 显示行字符串
+    """
+    day_str = date_weekday(day)
+    if not free:
+        return t("free_none", d=day_str)
+    total = to_min - from_min
+    covered = sum((e - s).total_seconds() for s, e in free) / 60
+    if covered >= total:
+        return t("free_all", d=day_str)
+    parts = [f"{s.strftime('%H:%M')}-{e.strftime('%H:%M')}" for s, e in free]
+    return t("free_slots", d=day_str, parts=join(parts))
+
+
+def cmd_free(args):
+    """查每天的空闲时段（默认今天 09:00-18:00）。
+
+    :param args: argparse 参数（date/--from/--to/--days/json）
+    :return: 0 成功
+    """
+    is_json = getattr(args, 'json', False)
+    token = get_token()
+    if not token:
+        raise CalError(t("err_auth_first"))
+
+    if args.date:
+        start_date = _parse_dt_arg(args.date, date_only=True).date()
+    else:
+        start_date = datetime.now(LOCAL_TZ).date()
+    from_str = getattr(args, 'from_time', None) or "09:00"
+    to_str = getattr(args, 'to_time', None) or "18:00"
+    try:
+        from_dt = datetime.strptime(from_str, "%H:%M")
+        to_dt = datetime.strptime(to_str, "%H:%M")
+    except ValueError:
+        raise CalError(t("err_time_hhmm", s=from_str))
+    from_min = from_dt.hour * 60 + from_dt.minute
+    to_min = to_dt.hour * 60 + to_dt.minute
+    if to_min <= from_min:
+        raise CalError(t("err_to_from", to=to_str, **{"from": from_str}))
+    days = getattr(args, 'days', None)
+    if days is None:
+        days = 1
+    if days < 1:
+        raise CalError(t("err_days_min"))
+
+    result = {}
+    for i in range(days):
+        d = start_date + timedelta(days=i)
+        q_start = datetime.combine(d, datetime.min.time())
+        q_end = q_start + timedelta(days=1)
+        start_iso = q_start.replace(tzinfo=LOCAL_TZ).isoformat(timespec="seconds")
+        end_iso = q_end.replace(tzinfo=LOCAL_TZ).isoformat(timespec="seconds")
+        url = (f"/me/calendar/calendarView?startDateTime={quote(start_iso, safe='')}&endDateTime={quote(end_iso, safe='')}"
+               f"&$select={_EVENT_SELECT},showAs&$orderby=start/dateTime")
+        events = _get_all(url, token, prefer_immutable=True)
+        free = _compute_free_slots(events, d, from_min, to_min)
+        if is_json:
+            # 按天结构：{"YYYY-MM-DD": [["HH:MM","HH:MM"], ...]}
+            result[d.strftime("%Y-%m-%d")] = [[s.strftime("%H:%M"), e.strftime("%H:%M")] for s, e in free]
+        else:
+            print(_format_free_day(d, free, from_min, to_min))
+    if is_json:
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        print()
+    return 0
