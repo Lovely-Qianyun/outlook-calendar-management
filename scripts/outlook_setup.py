@@ -13,7 +13,7 @@ import unicodedata
 from ocal_i18n import t
 from ocal_bootstrap import ensure_deps
 
-DEFAULT_CLIENT_ID = "cfec5685-f41e-4be9-80db-08eeddd763ba"  # CalendarOperator
+DEFAULT_CLIENT_ID = "cfec5685-f41e-4be9-80db-08eeddd763ba"  # Azure App: Agent Skill - Outlook Calendar Management
 
 TOKEN_PATH = os.path.expanduser("~/.outlook_cal_token.json")
 
