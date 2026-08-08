@@ -1,4 +1,5 @@
 """ocal_time — 时区与时间：本地时区探测、Graph 时间字符串解析、时间参数校验。"""
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -52,6 +53,9 @@ WINDOWS_TZ_MAP = {
     "New Zealand Standard Time": "Pacific/Auckland",
     "UTC": "UTC",
 }
+
+# IANA → Windows 名反向映射（Graph 的 timeZone 字段用 Windows 名最稳）
+IANA_TO_WINDOWS = {v: k for k, v in WINDOWS_TZ_MAP.items()}
 
 # ── 时区处理 ──────────────────────────────────────
 
@@ -107,12 +111,32 @@ def _detect_local_tz():
     tz = datetime.now().astimezone().tzinfo
     if not tz_name:
         tz_name = getattr(tz, 'key', None)
+    # Windows 的 tzinfo 有 .key，Linux/macOS 只有固定偏移（.key 为 None），
+    # 这时读系统时区文件拿 IANA 名（Windows 上没有这些文件，OSError 直接跳过）
+    if not tz_name:
+        try:
+            with open("/etc/timezone") as f:  # Debian/Ubuntu 专有
+                name = f.read().strip()
+                if name and not name.startswith("#"):
+                    tz_name = name
+        except OSError:
+            pass
+    if not tz_name:
+        # 兜底：/etc/localtime 是指向 /usr/share/zoneinfo/<IANA> 的符号链接（Linux/macOS 通用）
+        try:
+            link = os.path.realpath("/etc/localtime")
+            marker = "/zoneinfo/"
+            if marker in link:
+                tz_name = link.split(marker, 1)[1]
+        except OSError:
+            pass
     # Windows 名归一化成 IANA 名
     if tz_name in WINDOWS_TZ_MAP:
         tz_name = WINDOWS_TZ_MAP[tz_name]
     if ZoneInfo and tz_name:
         try:
-            return ZoneInfo(tz_name), tz_name
+            # 传给 Graph 的时区名优先用 Windows 名（兼容性最稳），没有映射就用 IANA 名
+            return ZoneInfo(tz_name), IANA_TO_WINDOWS.get(tz_name, tz_name)
         except Exception:
             pass
     return tz, tz_name or "UTC"

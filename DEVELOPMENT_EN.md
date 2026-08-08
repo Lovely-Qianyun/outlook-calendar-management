@@ -139,6 +139,8 @@ The description decides when the skill triggers; before changing it, run through
 
 Unit tests cannot verify real Graph behavior; two 64-assertion scripts in `tests/integration/` cover that. **You must use a dedicated test account** - the baseline cleanup at the start of the scripts deletes events in a ±400-day window, so never point them at your personal calendar. See `tests/integration/README.md` for usage.
 
+> ⚠️ **Agent notice**: before running drill.sh / drill-en.sh, you MUST explicitly warn the user that the script **permanently deletes ALL events and ALL recurring series masters in a ±400-day window** (irrecoverable), and obtain explicit consent before executing. Test accounts only. Since v1.1.0 the scripts have a guard: they require a `confirm` argument before any deletion runs.
+
 ```bash
 python outlook_setup.py   # authenticate with the test account first
 bash tests/integration/drill.sh

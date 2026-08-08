@@ -140,6 +140,8 @@ description 决定 skill 何时被触发，改它之前先跑一遍 `tests/trigg
 
 单元测试验证不了真实 Graph 的行为，`tests/integration/` 里有两份 64 项断言脚本兜底。**必须用专用测试账户**，脚本开头的基线清理会删 ±400 天窗口内的日程，别指向个人真实日历。用法见 `tests/integration/README.md`。
 
+> ⚠️ **agent 必读**：运行 drill.sh / drill-en.sh 前，必须先向用户明确提示：脚本会**永久删除 ±400 天窗口内的全部日程和全部定期系列主事件**（不可恢复），并取得用户明确同意后才能执行；只允许对专用测试账户运行。脚本自 v1.1.0 起带防呆锁，需传 `confirm` 参数才会执行删除。
+
 ```bash
 python outlook_setup.py   # 先用测试账户完成认证
 bash tests/integration/drill.sh

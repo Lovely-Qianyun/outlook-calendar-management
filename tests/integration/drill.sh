@@ -2,7 +2,14 @@
 # 真实账户边界条件回归：64 项行为断言（中文输出版）
 # 前置：已用 outlook_setup.py 对专用测试账户完成认证（token 在 ~/.outlook_cal_token.json）
 # 用法：bash tests/drill.sh
+# ⚠️ 危险：本脚本会删除 400 天窗口内的全部日程！只允许对专用测试账户运行。
+# 防呆：必须显式传参 confirm 才会真正执行删除（否则只跑只读断言）。
 set -u
+if [ "${1:-}" != "confirm" ]; then
+  echo "❌ 防呆保护：drill.sh 会删除 400 天内的所有日程，请确认目标账户是【专用测试账户】。"
+  echo "   确认无误后请运行：bash tests/drill.sh confirm"
+  exit 2
+fi
 cd "$(dirname "$0")/../.." || exit 1
 PY="python scripts/outlook_cal.py"
 export PYTHONIOENCODING=utf-8

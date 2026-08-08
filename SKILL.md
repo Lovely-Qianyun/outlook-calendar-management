@@ -1,7 +1,7 @@
 ---
 name: outlook-calendar-management
 description: "管理 Outlook 日历（微软账户 / outlook.com）日程：查看安排、查找日程（标题/地点/类别）、添加会议/生日/提醒、改时间或标题、挪到其他日期、删除（定期日程单次或整系列）、查空闲时段、查定期日程下次时间、按添加时间查最近加的。用户提到 Outlook 日历/微软日历的任何日程操作都优先用本 skill。不处理 Outlook 邮件（himalaya skill 负责）和其他日历（Google 日历等）。"
-version: 1.0.0
+version: 1.1.0
 ---
 
 # Outlook 日历助手

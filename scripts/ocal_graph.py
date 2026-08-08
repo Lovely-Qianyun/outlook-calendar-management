@@ -4,6 +4,7 @@ import requests, time
 from ocal_errors import CalError
 from ocal_auth import setup_hint
 from ocal_i18n import t
+from ocal_time import LOCAL_TZ_NAME
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
@@ -44,8 +45,11 @@ def _call(method, endpoint, token, data=None, prefer_immutable=False):
     :raises CalError: 网络错误、登录过期、API 报错（已转成友好文案）
     """
     headers = {"Authorization": f"Bearer {token}"}
+    # 让 Graph 按本地时区返回 start/end（不带这个头默认返回 UTC，会引发时区歧义）
+    prefer_parts = [f'outlook.timezone="{LOCAL_TZ_NAME}"']
     if prefer_immutable:
-        headers["Prefer"] = "IdType=\"ImmutableId\""
+        prefer_parts.append('IdType="ImmutableId"')
+    headers["Prefer"] = ", ".join(prefer_parts)
     if data:
         headers["Content-Type"] = "application/json"
     url = endpoint if endpoint.startswith("http") else f"{GRAPH_BASE}{endpoint}"
@@ -81,6 +85,20 @@ def _call(method, endpoint, token, data=None, prefer_immutable=False):
                 code = err.get('code', '')
             except Exception:
                 msg, code = resp.text[:200], ''
+            # 防御：个别邮箱/时区名不支持 Prefer 头时 Graph 返回 400，去掉时区头重试一次
+            # （Graph 默认按 UTC 返回，_parse_dt 会自行换算成本地时间，显示结果一致）
+            tz_bad = ("timezone" in msg.lower() or "time zone" in msg.lower()
+                      or "timezone" in code.lower())
+            if resp.status_code == 400 and tz_bad and "outlook.timezone" in headers.get("Prefer", ""):
+                headers["Prefer"] = headers["Prefer"].replace(f'outlook.timezone="{LOCAL_TZ_NAME}", ', "").replace(
+                    f'outlook.timezone="{LOCAL_TZ_NAME}"', "")
+                if not headers["Prefer"].strip():
+                    headers.pop("Prefer", None)
+                resp = requests.request(method, url, headers=headers, json=data, timeout=(10, 30))
+                if resp.status_code < 400:
+                    if resp.status_code == 204:
+                        return None
+                    return resp.json()
             if code == 'ErrorOccurrenceCrossingBoundary':
                 raise CalError(t("err_crossing"))
             if code == 'ErrorItemNotFound':

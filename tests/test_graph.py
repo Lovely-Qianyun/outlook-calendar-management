@@ -193,7 +193,10 @@ class TestCall:
         st = fake_request([Resp(payload={})])
         g._call("GET", "/me/events", "tk", prefer_immutable=True)
         headers = st["calls"][0][1]["headers"]
-        assert headers["Prefer"] == 'IdType="ImmutableId"'
+        prefer = headers["Prefer"]
+        assert 'IdType="ImmutableId"' in prefer
+        # 同时必须带本地时区头（不带 Prefer 时 Graph 默认按 UTC 返回，显示会偏）
+        assert 'outlook.timezone="' in prefer
 
 
 class TestGetAll:
