@@ -14,7 +14,9 @@
 3. **新建注册** → 填写自己的应用名称→ 账户类型选 **"仅个人 Microsoft 帐户"**
 4. **身份验证** → 添加平台 → **"移动和桌面应用程序"** → 勾选 `https://login.microsoftonline.com/common/oauth2/nativeclient`
 5. 身份验证页底部 → **"允许公共客户端流"** → 设为 **"是"** → 保存
-6. **API 权限** → 添加权限 → Microsoft Graph → 委托权限 → 搜索 `Calendars.ReadWrite` → 添加
+6. **API 权限** → 添加权限 → Microsoft Graph → 委托权限 → 搜索并添加两个权限：
+   - `Calendars.ReadWrite`（日程读写，必需）
+   - `MailboxSettings.Read`（读取邮箱首选时区——全天日程按邮箱时区写入需要它；不加则全天日程退回按本机时区写）
 7. 回到 **概览** 页，复制顶部 **"应用程序(客户端) ID"**
 
 ## 认证
@@ -30,5 +32,5 @@ python outlook_setup.py <你的Client ID>
 | 症状 | 原因与解决 |
 |------|-----------|
 | 设备码报"找不到应用" | 账户类型没选"个人 Microsoft 帐户"，或"允许公共客户端流"没开启 |
-| 403 Forbidden | `Calendars.ReadWrite` 委托权限没加 |
+| 403 Forbidden | `Calendars.ReadWrite` 委托权限没加；`status` 不显示邮箱时区、全天日程退回本机时区时检查 `MailboxSettings.Read` 是否已加 |
 | 验证码过期 | 重新运行 `python outlook_setup.py` 再试一次 |

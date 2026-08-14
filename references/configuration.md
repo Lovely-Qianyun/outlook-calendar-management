@@ -9,8 +9,10 @@ python outlook_setup.py            # 无参数 = 内置默认应用
 
 1. 脚本打印一个**验证码**
 2. 浏览器打开 `https://www.microsoft.com/link`，输入验证码
-3. 用你的 Outlook 账户（微软账户）登录并授权
+3. 用你的 Outlook 账户（微软账户）登录并授权（授权范围：`Calendars.ReadWrite` 日历读写 + `MailboxSettings.Read` 邮箱设置读取——后者用于全天日程按邮箱首选时区写入）
 4. 完成 → 之后**自动续期，不用再认证**
+
+> 从旧版本升级时请重跑一次 `python outlook_setup.py` 补上 `MailboxSettings.Read` 权限（本次授权会出现新的权限确认项）。
 
 **确认成功**：`python outlook_cal.py status` 显示"✅ 已连接到 Outlook 日历"。
 

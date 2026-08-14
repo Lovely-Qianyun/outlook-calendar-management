@@ -7,7 +7,8 @@
 | 设备码报"找不到应用"     | 注册应用时账户类型选"个人 Microsoft 帐户"并开启"公共客户端流"（仅自带应用场景） |
 | 登录过期 / invalid_grant | 重新运行 `python outlook_setup.py`                                              |
 | 403 权限错误             | 确认应用已授权 `Calendars.ReadWrite` 权限                                       |
-| 时间显示不对（差几小时） | Windows 需安装 `pip install tzdata`；装完重新运行命令                           |
+| 时间显示不对（差几小时） | Windows 需安装 `pip install tzdata`；装完重新运行命令；仍不对可显式设置 `TZ` 环境变量（如 `TZ=Asia/Shanghai`），它会优先于系统探测 |
+| 全天日程在 Outlook 里跨两天显示 | 机器时区与 Outlook 账户时区不一致：重跑 `python outlook_setup.py` 授权 `MailboxSettings.Read`，之后全天日程按邮箱时区写入（`status` 会提示两者不同） |
 
 ## 日程操作问题
 
@@ -31,6 +32,8 @@
 | 截止/次数没配 `--repeat`                         | 重复截止/次数需要配合 --repeat 使用        |
 | 事件 ID 为空 / 不存在                            | 事件ID不能为空 / 该日程不存在或已被删除    |
 | `move` 同时给 `--days` 和 `--to` / 移动 0 天     | 明确提示二选一 / 移动天数不能为 0          |
+
+| 夏令时切换日提示"本地时间不存在" | 正常提示：切换日有些墙钟时间（如美东 3 月的 02:30）不存在，服务端可能按跳变后时间调整，请改用存在的时间 |
 
 ## 真的报错（traceback）怎么办
 

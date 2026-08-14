@@ -20,6 +20,7 @@ New to this kind of project? Here are the key terms:
 - Free-time lookup: ask "what time is free on Friday afternoon" and get the answer directly
 - Bilingual output, auto-selected by system language; override with `--lang zh|en` or the `OCAL_LANG` environment variable
 - Auto-installs dependencies on first run (including the `tzdata` timezone database, so times resolve correctly on Windows); no manual install
+- Relative times accepted directly: `today`/`tomorrow`/`this Friday`/`今天下午2点` are resolved against the system clock at run time - "today" can never become yesterday (`status` prints the current date to cross-check)
 - Machine-readable: append `--json` to any command for clean JSON output, ready for other programs to consume
 - Reliably parseable output: event IDs are always marked with 🆔 (see "How It Works"), so agents and scripts can always find them
 
@@ -63,7 +64,8 @@ The 🆔 line in the output is that event's ID - every modify, delete, and move 
 The overall design idea is simple: **output is always predictable and verifiable** - machines never misread it, and humans never get confused. Three pillars:
 
 - **Official Microsoft API - equivalent to doing it by hand**: the program calls Microsoft Graph API, Microsoft's official interface for the Outlook calendar. The effect is identical to operating Outlook yourself, and changes sync in real time to phone, computer, and web. Sign-in uses the device-code flow: the first run shows you a code, open microsoft.com/link in your browser and enter it; afterwards the login renews automatically via Microsoft's auth library (`msal`). **No local service runs in the background**
-- **Timezones handled automatically, following your computer**: all times are parsed, displayed, and converted in the computer's local timezone (Windows timezone names are auto-mapped); no mental math across timezones
+- **Timezones handled automatically, following your computer**: all times are parsed, displayed, and converted in the computer's local timezone (official Windows timezone names and IANA names are fully mapped); no mental math across timezones. Set the `TZ` environment variable to override when detection fails
+- **All-day events are written in the mailbox's preferred timezone**: they never span two days in Outlook even when the computer's timezone differs from the account's (after upgrading, re-run `python outlook_setup.py` once to grant the new permission)
 - **Output follows a fixed "protocol" - machines never misread it**: the output format is fixed - every event's ID always appears on the line starting with 🆔 (e.g. `AAMkAD...` in the examples), and times, locations, categories, etc. have fixed formats and markers. These markers (emoji anchors) are language-independent - Chinese and English output share the same set - so agents and scripts parse reliably in any language. For programmatic use (e.g. your own scripts), append `--json` for clean JSON output with no human-oriented text mixed in
 
 ## Project Structure
@@ -79,9 +81,10 @@ outlook-calendar-management/
 
 ## Testing
 
-- **202 offline unit tests** (pytest): cover the functional modules; all network calls are mocked (no network, no real account needed), runnable anytime
+- **270 offline unit tests** (pytest): cover the functional modules; all network calls are mocked (no network, no real account needed), runnable anytime; GitHub Actions runs them on Linux/Windows/macOS × Python 3.10/3.13
 - **Trigger evaluation set** (`tests/trigger-eval.md`): a full set of "what should trigger this skill and what shouldn't" examples. When you change the trigger description in SKILL.md, check against it to prevent missed and false triggers
-- **Optional live dry-runs**: 64 checks against a real Outlook account to verify compatibility with the real service (requires a dedicated test account; see `tests/integration/`)
+- **Output-protocol evaluation set** (`tests/protocol-eval.md` + `tests/test_protocol.py`): the regexes agents use to extract 🆔 / free slots / errors are pinned one by one, so output-format changes can't silently break downstream parsing
+- **Optional live dry-runs**: 106 checks against a real Outlook account to verify compatibility with the real service (requires a dedicated test account; see `tests/integration/`)
 
 ## Development
 
