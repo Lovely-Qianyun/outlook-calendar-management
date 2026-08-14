@@ -198,6 +198,56 @@ class TestCall:
         # 同时必须带本地时区头（不带 Prefer 时 Graph 默认按 UTC 返回，显示会偏）
         assert 'outlook.timezone="' in prefer
 
+    def test_timezone_400_falls_back_without_tz_header(self, fake_request):
+        """个别邮箱不支持 outlook.timezone 头时返回 400，去掉时区头重发一次。
+
+        重发必须走回主循环（同样的重试与错误映射），第二次请求的
+        Prefer 头里不能再有时区部分；ImmutableId 部分保留。
+        """
+        bad = Resp(status=400, payload={"error": {"code": "ErrorInvalidTimeZone",
+                                                  "message": "The time zone specified is invalid"}})
+        st = fake_request([bad, Resp(payload={"value": []})])
+        assert g._call("GET", "/me/events", "tk", prefer_immutable=True) == {"value": []}
+        prefer2 = st["calls"][1][1]["headers"]["Prefer"]
+        assert "outlook.timezone" not in prefer2
+        assert 'IdType="ImmutableId"' in prefer2
+
+    def test_timezone_fallback_strips_only_once(self, fake_request):
+        """去掉时区头后仍报 400 时不再剥第二次，按普通 API 错误报出。
+
+        曾有的 bug：回退分支里直接 requests.request 裸重发，网络异常会
+        裸 traceback；改成走主循环后，这里验证不会死循环且错误映射正常。
+        """
+        bad = Resp(status=400, payload={"error": {"code": "ErrorInvalidTimeZone",
+                                                  "message": "The time zone specified is invalid"}})
+        st = fake_request([bad, bad])
+        with pytest.raises(CalError) as ei:
+            g._call("GET", "/me/events", "tk")
+        assert "API 错误 400" in str(ei.value)
+        assert len(st["calls"]) == 2
+
+    def test_timezone_fallback_network_error_mapped(self, monkeypatch):
+        """去掉时区头重发时遇到网络异常，也要走 CalError 而不是裸 traceback。
+
+        曾有的 bug：回退分支里 requests.request 裸重发、没有 try/except，
+        网络抖动直接炸 traceback。走回主循环后按 GET 的重试规则再试后报网络错误。
+        """
+        bad = Resp(status=400, payload={"error": {"code": "ErrorInvalidTimeZone",
+                                                  "message": "time zone"}})
+        exc = g.requests.exceptions.ConnectionError("down")
+        calls = []
+        def _req(*a, **k):
+            calls.append(1)
+            if len(calls) == 1:
+                return bad
+            raise exc
+        monkeypatch.setattr(g.requests, "request", _req)
+        monkeypatch.setattr(g.time, "sleep", lambda s: None)
+        with pytest.raises(CalError) as ei:
+            g._call("GET", "/me/events", "tk")
+        assert "网络错误" in str(ei.value)
+        assert len(calls) == 3  # 1 次 400 + 2 次网络错误（GET 重试规则）
+
 
 class TestGetAll:
     """翻页 _get_all。
@@ -219,3 +269,14 @@ class TestGetAll:
         """没有下一页时只取一页。"""
         fake_request([Resp(payload={"value": [{"id": 1}]})])
         assert len(g._get_all("/me/events", "tk")) == 1
+
+    def test_repeating_nextlink_stops_at_guard(self, monkeypatch):
+        """nextLink 异常重复时翻页守卫兜底，不死循环也不静默截断真实数据。"""
+        calls = []
+        def _req(*a, **k):
+            calls.append(1)
+            return Resp(payload={"value": [{"id": 1}], "@odata.nextLink": "https://x/again"})
+        monkeypatch.setattr(g.requests, "request", _req)
+        items = g._get_all("/me/events", "tk")
+        assert len(items) == 200  # 防御上限
+        assert len(calls) == 200

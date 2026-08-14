@@ -1,10 +1,65 @@
-"""ocal_auth — 认证与 token：token 文件读写、自动续期。"""
+"""ocal_auth — 认证与 token：token 文件读写、自动续期、跨进程续期锁。"""
+import contextlib
 import os, json, time
 
 from ocal_errors import CalError
 from ocal_i18n import t
 
 TOKEN_PATH = os.path.expanduser("~/.outlook_cal_token.json")
+
+# 权限清单：日历读写 + 邮箱设置读取（全天日程按邮箱首选时区写入用）。
+# 老版本 token 只有 Calendars.ReadWrite，读 mailboxSettings 会 403，
+# 上层已做静默回退——但建议用户重跑 outlook_setup.py 拿到新权限。
+SCOPES = ("Calendars.ReadWrite", "MailboxSettings.Read")
+
+
+@contextlib.contextmanager
+def _token_lock():
+    """跨进程续期锁（非阻塞，拿不到就跳过）。
+
+    两个终端同时续期时，双方拿到的 refresh token 都有效（最后写者胜），
+    锁的意义是避免重复请求与文件交叉写；拿不到锁直接继续，不影响正确性。
+
+    :yield: 锁持有期间执行续期与写文件
+    """
+    path = TOKEN_PATH + ".lock"
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError:
+        yield  # 锁文件都建不了（只读目录等），跳过锁
+        return
+    acquired = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+            try:
+                if os.fstat(fd).st_size == 0:
+                    os.write(fd, b"\0")  # msvcrt 锁至少要锁住 1 字节
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                acquired = True
+            except OSError:
+                pass
+        else:
+            import fcntl
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except OSError:
+                pass
+        yield
+    finally:
+        try:
+            if acquired:
+                if os.name == "nt":
+                    import msvcrt
+                    os.lseek(fd, 0, 0)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
 
 
 def setup_hint():
@@ -42,7 +97,17 @@ def get_token():
     client_id = data.get('client_id') or os.environ.get('OUTLOOK_CLIENT_ID', '')
     if not client_id:
         raise CalError(t("err_no_client_id", hint=setup_hint()))
-    return _refresh_token(refresh_token, client_id, data.get('_authority', 'consumers'))
+    with _token_lock():
+        # 双检：拿到锁后重读文件，另一个进程可能刚刚续好并写回
+        try:
+            with open(TOKEN_PATH, 'r', encoding='utf-8') as f:
+                data2 = json.load(f)
+            at2 = data2.get('access_token')
+            if at2 and data2.get('expires_at', 0) > time.time() + 300:
+                return at2
+        except (OSError, json.JSONDecodeError):
+            pass
+        return _refresh_token(refresh_token, client_id, data.get('_authority', 'consumers'))
 
 
 def _refresh_token(refresh_token, client_id, authority):
@@ -59,14 +124,27 @@ def _refresh_token(refresh_token, client_id, authority):
     except ImportError:
         raise CalError(t("err_no_msal"))
     app = PublicClientApplication(client_id, authority=f"https://login.microsoftonline.com/{authority}")
-    result = app.acquire_token_by_refresh_token(refresh_token, scopes=["Calendars.ReadWrite"])
+    result = app.acquire_token_by_refresh_token(refresh_token, scopes=list(SCOPES))
     if 'access_token' in result:
         result['refresh_token'] = result.get('refresh_token', refresh_token)
         result['expires_at'] = time.time() + result.get('expires_in', 3600)
         result['_authority'] = authority
         result['client_id'] = client_id
-        with open(TOKEN_PATH, 'w', encoding='utf-8') as f:
-            json.dump(result, f, ensure_ascii=False)
+        # 先写临时文件再原子替换：写入中途崩溃不会把 token 文件写坏成半截 JSON
+        tmp = TOKEN_PATH + ".tmp"
+        try:
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(result, f, ensure_ascii=False)
+            try:
+                os.chmod(tmp, 0o600)  # token 含 access/refresh token，收紧权限
+            except OSError:
+                pass
+            os.replace(tmp, TOKEN_PATH)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
         return result['access_token']
     error = result.get('error', 'unknown')
     desc = result.get('error_description', '')

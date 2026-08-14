@@ -22,7 +22,7 @@ import argparse, json, sys
 
 from ocal_errors import CalError
 from ocal_i18n import t, set_lang
-from ocal_bootstrap import ensure_deps
+from ocal_bootstrap import ensure_deps, harden_stdio
 
 # ── 入口 ──────────────────────────────────────────
 
@@ -50,6 +50,8 @@ def main():
     """
     # 语言先于 argparse 生效：--lang > OCAL_LANG > 系统检测 > 默认 zh
     set_lang(_argv_lang(sys.argv[1:]))
+    # 窄编码管道（Windows GBK）下 emoji 输出不崩（见 harden_stdio）
+    harden_stdio()
     # 依赖自检必须在导入 ocal_events 之前（它经 ocal_graph 顶层 import requests，
     # 缺失依赖时会先崩在导入上，bootstrap 就没机会运行）
     ensure_deps()
