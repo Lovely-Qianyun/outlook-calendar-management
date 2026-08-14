@@ -97,6 +97,8 @@ T = {
         "status_run_setup": "   请先运行: python outlook_setup.py（无参数即内置应用）",
         "status_api_error": "⚠️  日历 API 连接异常: {e}",
         "status_connected": "✅ 已连接到 Outlook 日历",
+        "status_today": "   📅 当前日期: {d}",
+        "status_mailbox_tz": "   🌐 邮箱时区: {tz}（与本机不同；全天日程已按邮箱时区写入）",
         "status_expiry": "   🔑 登录有效期: {h} 小时 {m} 分钟",
         "status_expired_auto": "   🔑 登录已过期，将在下次操作时自动续期",
         # ── list / 显示 ──
@@ -123,7 +125,6 @@ T = {
         "remind_days": "提前 {n} 天提醒",
         "remind_minutes": "提前 {n} 分钟提醒",
         "conflict_header": "\n⚠️ 与以下现有日程重叠（如需仍添加请忽略）：",
-        "conflict_series_note": "（定期系列仅检查首次出现）",
         "add_success": "\n✅ 已添加到日历:",
         # ── update ──
         "err_series_rule": "该日程是定期系列的一次出现，修改系列规则请先 read 获取「🆕 系列主事件ID」，再对主事件修改",
@@ -159,6 +160,8 @@ T = {
         "confirm_delete": "📋 将删除「{s}」",
         "deleted_series": "🗑️ 已从日历中移除整个系列「{s}」（含全部出现）",
         "deleted_occurrence": "🗑️ 已从日历中移除本次出现「{s}」（其余出现保留）",
+        "deleted_single": "🗑️ 已从日历中移除「{s}」",
+        "delete_recoverable": "   💡 刚删的日程在 Outlook「已删除项目」中仍可找回（一段时间内）",
         # ── move ──
         "err_days_to": "--days 与 --to 不能同时使用",
         "err_move_args": "请指定 --days N（N 可为负数，按天平移）或 --to YYYY-MM-DD（移到目标日期）",
@@ -185,6 +188,9 @@ T = {
         "err_time_dt": "时间格式错误: {s!r}（应为 YYYY-MM-DD HH:MM，如 2026-08-10 09:00）",
         "err_time_both": "时间格式错误: {s!r}（应为 YYYY-MM-DD 或 YYYY-MM-DD HH:MM）",
         "warn_unknown_tz": "⚠️ 未知时区 {tz}，已按 UTC 处理",
+        "warn_offset_tz": "⚠️ 无法确定系统时区名，已按当前偏移 {name} 处理（夏令时地区可能差一小时，建议设置 TZ 环境变量）",
+        "warn_tz_utc": "⚠️ 无法确定系统时区，日程时间可能不正确；请设置 TZ 环境变量（如 TZ=Asia/Shanghai）后重试",
+        "warn_dst_nonexistent": "⚠️ 本地时间 {t} 在夏令时切换中不存在，服务端可能按跳变后的时间调整",
         # ── Graph / 认证 ──
         "setup_hint": "python outlook_setup.py（无参数即内置应用；如需自带应用: outlook_setup.py <应用ID>）",
         "err_network_maybe": "网络错误: {e}\n   若请求可能已提交，请先 list 确认，不要盲目重试",
@@ -245,7 +251,7 @@ T = {
         "help_add": "添加日程",
         "help_subject": "日程标题",
         "help_start": "开始时间 (日期 或 日期 时间)",
-        "help_end": "结束时间（全天日程不需要）",
+        "help_end": "结束时间（全天日程给结束日期表示多天，如 2026-08-12）",
         "help_all_day": "全天日程",
         "help_location": "地点",
         "help_body": "备注",
@@ -330,6 +336,8 @@ T = {
         "status_run_setup": "   Run first: python outlook_setup.py",
         "status_api_error": "⚠️  Calendar API error: {e}",
         "status_connected": "✅ Connected to Outlook calendar",
+        "status_today": "   📅 Today: {d}",
+        "status_mailbox_tz": "   🌐 Mailbox timezone: {tz} (differs from this computer; all-day events are written in it)",
         "status_expiry": "   🔑 Login valid for: {h}h {m}m",
         "status_expired_auto": "   🔑 Login expired; will refresh automatically on next operation",
         # ── list / 显示 ──
@@ -356,7 +364,6 @@ T = {
         "remind_days": "Remind {n} days before",
         "remind_minutes": "Remind {n} minutes before",
         "conflict_header": "\n⚠️ Overlaps with existing events (ignore to proceed):",
-        "conflict_series_note": " (series: only first occurrence checked)",
         "add_success": "\n✅ Added to calendar:",
         # ── update ──
         "err_series_rule": "This is one occurrence of a series; to change the series rule, first `read` for the 🆕 series master event ID, then update the master",
@@ -392,6 +399,8 @@ T = {
         "confirm_delete": "📋 Will delete \"{s}\"",
         "deleted_series": "🗑️ Removed the whole series \"{s}\" (all occurrences)",
         "deleted_occurrence": "🗑️ Removed this occurrence \"{s}\" (other occurrences kept)",
+        "deleted_single": "🗑️ Removed \"{s}\" from the calendar",
+        "delete_recoverable": "   💡 Tip: recently deleted events are still recoverable from Outlook's Deleted Items for a while",
         # ── move ──
         "err_days_to": "--days and --to cannot be used together",
         "err_move_args": "Specify --days N (can be negative, shift by days) or --to YYYY-MM-DD (move to a date)",
@@ -418,6 +427,9 @@ T = {
         "err_time_dt": "Invalid time format: {s!r} (expected YYYY-MM-DD HH:MM, e.g. 2026-08-10 09:00)",
         "err_time_both": "Invalid time format: {s!r} (expected YYYY-MM-DD or YYYY-MM-DD HH:MM)",
         "warn_unknown_tz": "⚠️ Unknown timezone {tz}; using UTC",
+        "warn_offset_tz": "⚠️ Could not determine the system timezone name; using current offset {name} (DST regions may be off by one hour; consider setting the TZ environment variable)",
+        "warn_tz_utc": "⚠️ Could not determine the system timezone; event times may be wrong. Set the TZ environment variable (e.g. TZ=Asia/Shanghai) and retry",
+        "warn_dst_nonexistent": "⚠️ Local time {t} does not exist due to a DST transition; the server may adjust it to the shifted time",
         # ── Graph / 认证 ──
         "setup_hint": "python outlook_setup.py (no args = built-in app; own app: outlook_setup.py <App ID>)",
         "err_network_maybe": "Network error: {e}\n   If the request may have been submitted, run list first to verify; don't blindly retry",
@@ -478,7 +490,7 @@ T = {
         "help_add": "Add an event",
         "help_subject": "Event title",
         "help_start": "Start (date or date time)",
-        "help_end": "End (not needed for all-day)",
+        "help_end": "End (for all-day: an end date makes it multi-day, e.g. 2026-08-12)",
         "help_all_day": "All-day event",
         "help_location": "Location",
         "help_body": "Notes",

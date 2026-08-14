@@ -67,6 +67,25 @@ def _mock_net(monkeypatch, call_fn=None, get_all=None):
     monkeypatch.setattr(ev, "_get_all", get_all or (lambda *a, **k: []))
 
 
+class TestCmdStatus:
+    """status 命令路径（mock 网络）：显示当前日期——agent 换算"今天"的基准。"""
+
+    def test_human_shows_today(self, capsys, monkeypatch):
+        """人类输出带当前日期行。"""
+        _mock_net(monkeypatch, call_fn=lambda *a, **k: {"owner": {"address": "x@y.z"}})
+        assert ev.cmd_status(_args()) == 0
+        out = capsys.readouterr().out
+        assert "当前日期" in out
+        assert datetime.now(ev.LOCAL_TZ).strftime("%Y") in out
+
+    def test_json_has_today(self, capsys, monkeypatch):
+        """--json 输出带 today 键（YYYY-MM-DD），供程序直接取。"""
+        _mock_net(monkeypatch, call_fn=lambda *a, **k: {"owner": {"address": "x@y.z"}})
+        assert ev.cmd_status(_args(json=True)) == 0
+        d = json.loads(capsys.readouterr().out)
+        assert d["today"] == datetime.now(ev.LOCAL_TZ).strftime("%Y-%m-%d")
+
+
 class TestOverlaps:
     """重叠判断 _overlaps。
 
@@ -266,6 +285,12 @@ class TestComputeFreeSlots:
                          end={"dateTime": "2026-08-11T00:00:00", "timeZone": "UTC"})]
         assert ev._compute_free_slots(events, self._day(), 9 * 60, 18 * 60) == []
 
+    def test_cancelled_occurrence_ignored(self):
+        """定期系列已取消的单次不占时间，窗口保持空闲。"""
+        events = [_event(id="1", isCancelled=True, seriesMasterId="M1")]
+        free = ev._compute_free_slots(events, self._day(), 9 * 60, 18 * 60)
+        assert free == [self._slot((9, 0), (18, 0))]
+
 
 class TestFormatFreeDay:
     """空闲结果显示 _format_free_day。
@@ -325,6 +350,13 @@ class TestCheckConflicts:
         _mock_net(monkeypatch, get_all=lambda *a, **k: [_event(id="1")])
         assert ev._check_conflicts("tk", datetime(2026, 8, 10, 14, 0),
                                    datetime(2026, 8, 10, 15, 0), False) == []
+
+    def test_cancelled_occurrence_not_counted(self, monkeypatch):
+        """定期系列已取消的单次不算占用，不构成假冲突。"""
+        events = [_event(id="1", isCancelled=True, seriesMasterId="M1")]
+        _mock_net(monkeypatch, get_all=lambda *a, **k: events)
+        assert ev._check_conflicts("tk", datetime(2026, 8, 10, 9, 30),
+                                   datetime(2026, 8, 10, 10, 30), False) == []
 
 
 class TestCmdAdd:
@@ -393,6 +425,47 @@ class TestCmdAdd:
         ev.cmd_add(self._args(start="2026-08-10", end=None))
         assert calls["data"]["isAllDay"] is True
 
+    def test_multi_day_all_day(self, monkeypatch):
+        """全天给结束日期 → 多天全天，Graph 的 end 存末日次日 00:00。
+
+        曾有的 bug：全天分支静默丢弃结束日期，用户给 3 天只建出 1 天。
+        """
+        calls = {}
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            calls["data"] = data
+            return _event()
+        _mock_net(monkeypatch, call_fn=fake)
+        ev.cmd_add(self._args(start="2026-08-10", end="2026-08-12", all_day=True))
+        assert calls["data"]["isAllDay"] is True
+        assert calls["data"]["start"]["dateTime"] == "2026-08-10T00:00:00"
+        assert calls["data"]["end"]["dateTime"] == "2026-08-13T00:00:00"
+
+    def test_all_day_with_timed_end_raises(self, monkeypatch):
+        """全天 + 带时间的结束 → 报错而不是静默截成一天。"""
+        _mock_net(monkeypatch)
+        with pytest.raises(CalError):
+            ev.cmd_add(self._args(start="2026-08-10", end="2026-08-12 18:00", all_day=True))
+
+    def test_all_day_end_before_start_raises(self, monkeypatch):
+        """全天结束日期早于开始 → 报错。"""
+        _mock_net(monkeypatch)
+        with pytest.raises(CalError):
+            ev.cmd_add(self._args(start="2026-08-10", end="2026-08-09", all_day=True))
+
+    def test_all_day_uses_mailbox_tz(self, monkeypatch):
+        """全天日程按邮箱首选时区写入（机器时区 ≠ 邮箱时区时不跨天）。"""
+        monkeypatch.setattr(ev, "_mailbox_tz", {"name": None, "tried": False})
+        calls = {}
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            if endpoint.startswith("/me/mailboxSettings"):
+                return {"timeZone": "Pacific Standard Time"}
+            calls["data"] = data
+            return _event()
+        _mock_net(monkeypatch, call_fn=fake)
+        ev.cmd_add(self._args(start="2026-08-10", end=None, all_day=True))
+        assert calls["data"]["start"]["timeZone"] == "Pacific Standard Time"
+        assert calls["data"]["end"]["timeZone"] == "Pacific Standard Time"
+
     def test_end_before_start_raises(self, monkeypatch):
         """结束早于开始要报错，不能造出时间倒挂的日程。"""
         _mock_net(monkeypatch)
@@ -415,6 +488,63 @@ class TestCmdAdd:
         with pytest.raises(CalError):
             ev.cmd_add(self._args(repeat_until="2026-12-31"))
 
+    def test_remind_turns_reminder_on(self, monkeypatch):
+        """add --remind 显式打开 isReminderOn（个别邮箱默认关闭提醒时不失效）。"""
+        calls = {}
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            calls["data"] = data
+            return _event()
+        _mock_net(monkeypatch, call_fn=fake)
+        ev.cmd_add(self._args(remind=10))
+        assert calls["data"]["isReminderOn"] is True
+
+    def test_body_passed_as_graph_body(self, monkeypatch):
+        """add -b 备注 → Graph 的 event.body（contentType=text），read/list 都能用。"""
+        calls = {}
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            calls["data"] = data
+            return _event()
+        _mock_net(monkeypatch, call_fn=fake)
+        ev.cmd_add(self._args(body="记得带电脑"))
+        assert calls["data"]["body"] == {"contentType": "text", "content": "记得带电脑"}
+
+    def test_conflict_warning_goes_to_stderr(self, capsys, monkeypatch):
+        """冲突警告（含现有日程的 🆔 行）必须走 stderr，不能进 stdout 协议流。
+
+        曾有的风险：警告里带现有事件的 🆔，进 stdout 会让 agent 分不清
+        哪个 🆔 是新日程，拿错 ID 会改/删错日程。
+        """
+        events = [_event(id="CONFLICT1")]
+        _mock_net(monkeypatch, get_all=lambda *a, **k: events)
+        ev.cmd_add(self._args(start="2026-08-10 09:30", end="2026-08-10 10:30",
+                              force=False))
+        cap = capsys.readouterr()
+        assert "CONFLICT1" in cap.err
+        assert "🆔 CONFLICT1" not in cap.out
+
+    def test_multi_day_all_day_conflict_window_covers_span(self, monkeypatch):
+        """多天全天的冲突查询窗口必须覆盖整个日期段。
+
+        曾有的 bug：全天事件只查第一天，第 2 天起的重叠日程查不到，
+        多天全天（旅行/休假）与实际冲突的事件完全不告警。
+        """
+        events = [_event(id="D2", start={"dateTime": "2026-08-12T10:00:00",
+                                         "timeZone": "China Standard Time"},
+                         end={"dateTime": "2026-08-12T11:00:00", "timeZone": "China Standard Time"})]
+        monkeypatch.setattr(ev, "get_token", lambda: "tk")
+        monkeypatch.setattr(ev, "_get_all", lambda *a, **k: events)
+        result = ev._check_conflicts("tk", datetime(2026, 8, 10),
+                                     datetime(2026, 8, 13), True)
+        assert len(result) == 1 and result[0][0]["id"] == "D2"
+
+    def test_mailbox_tz_fallback(self, monkeypatch):
+        """读不到邮箱时区（旧 token 无权限）时回退本机时区，功能不阻断。"""
+        monkeypatch.setattr(ev, "_mailbox_tz", {"name": None, "tried": False})
+        from ocal_errors import CalError as _CE
+        monkeypatch.setattr(ev, "_call", lambda *a, **k: (_ for _ in ()).throw(_CE("403")))
+        name, ok = ev._mailbox_tz_name("tk")
+        assert ok is False and name == ev.LOCAL_TZ_NAME
+
 
 class TestCmdUpdate:
     """update 命令路径（mock 网络）。
@@ -435,10 +565,13 @@ class TestCmdUpdate:
         """一个字段都没给时提示并返回 1，不发 PATCH。
 
         用户可能误以为"不写参数=不改"，这里要明确告知。
+        提示走 stderr（stdout 只留给结果与 🆔 协议行）。
         """
         _mock_net(monkeypatch)
         assert ev.cmd_update(self._args()) == 1
-        assert "没有要修改的字段" in capsys.readouterr().out
+        cap = capsys.readouterr()
+        assert "没有要修改的字段" in cap.err
+        assert cap.out == ""
 
     def test_change_subject(self, capsys, monkeypatch):
         """改标题：先 GET 原事件，再 PATCH 带上新值，输出成功。"""
@@ -459,6 +592,127 @@ class TestCmdUpdate:
         with pytest.raises(CalError):
             ev.cmd_update(self._args(start="2026-08-10 10:00", end="2026-08-10 09:00"))
 
+    def test_remind_on_all_day_to_timed_uses_minutes(self, monkeypatch):
+        """全天转时段时 --remind N 必须按分钟算。
+
+        曾有的 bug：提醒语义按事件原类型（全天）判断，--no-all-day --remind 10
+        会被当成"提前 10 天"（×1440 分钟）。转换后的事件是时段，N 就是分钟。
+        """
+        calls = {}
+        all_day_ev = _event(isAllDay=True,
+                            start={"dateTime": "2026-08-10T00:00:00", "timeZone": "China Standard Time"},
+                            end={"dateTime": "2026-08-11T00:00:00", "timeZone": "China Standard Time"})
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            if method == "GET":
+                return all_day_ev
+            calls["patch"] = data
+            return _event(subject=data.get("subject", "x"))
+        _mock_net(monkeypatch, call_fn=fake)
+        assert ev.cmd_update(self._args(all_day=False, start="2026-08-10 09:00",
+                                        end="2026-08-10 10:00", remind=10)) == 0
+        assert calls["patch"]["reminderMinutesBeforeStart"] == 10
+
+    def test_remind_on_all_day_stays_days(self, monkeypatch):
+        """保持全天时 --remind N 仍是"提前 N 天"语义。"""
+        calls = {}
+        all_day_ev = _event(isAllDay=True,
+                            start={"dateTime": "2026-08-10T00:00:00", "timeZone": "China Standard Time"},
+                            end={"dateTime": "2026-08-11T00:00:00", "timeZone": "China Standard Time"})
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            if method == "GET":
+                return all_day_ev
+            calls["patch"] = data
+            return _event(subject="x")
+        _mock_net(monkeypatch, call_fn=fake)
+        assert ev.cmd_update(self._args(remind=2)) == 0
+        assert calls["patch"]["reminderMinutesBeforeStart"] == 2 * 1440
+
+    def test_remind_turns_reminder_on(self, monkeypatch):
+        """--remind 必须同时打开 isReminderOn。
+
+        曾有的 bug：事件此前 --no-remind（isReminderOn=false）时，
+        只 PATCH 分钟数不会自动打开提醒开关，用户以为设了提醒其实永远不会响。
+        """
+        calls = {}
+        off_ev = _event(isReminderOn=False, reminderMinutesBeforeStart=15)
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            if method == "GET":
+                return off_ev
+            calls["patch"] = data
+            return _event(subject="x")
+        _mock_net(monkeypatch, call_fn=fake)
+        assert ev.cmd_update(self._args(remind=30)) == 0
+        assert calls["patch"]["isReminderOn"] is True
+        assert calls["patch"]["reminderMinutesBeforeStart"] == 30
+
+    def test_repeat_with_new_start_uses_new_startdate(self, monkeypatch):
+        """--repeat 与 --start 同命令时，range.startDate 必须用新日期。
+
+        曾有的 bug：startDate 取自原事件开始日期，与 PATCH 后的新 start 不一致，
+        Graph 会拒绝（"startDate must match start"）或造出错系列。
+        """
+        calls = {}
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            if method == "GET":
+                return _event()  # 原事件 2026-08-10 09:00
+            calls["patch"] = data
+            return _event(subject="x")
+        _mock_net(monkeypatch, call_fn=fake)
+        assert ev.cmd_update(self._args(start="2026-09-01 09:00", end="2026-09-01 10:00",
+                                        repeat="每天")) == 0
+        assert calls["patch"]["recurrence"]["range"]["startDate"] == "2026-09-01"
+
+    def test_update_multi_day_all_day(self, monkeypatch):
+        """update --all-day --start/--end 两个日期 → 多天全天区间。"""
+        calls = {}
+        timed_ev = _event()  # 原为时段事件
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            if method == "GET":
+                return timed_ev
+            calls["patch"] = data
+            return _event(subject="x", isAllDay=True,
+                          start={"dateTime": "2026-08-10T00:00:00", "timeZone": "China Standard Time"},
+                          end={"dateTime": "2026-08-13T00:00:00", "timeZone": "China Standard Time"})
+        _mock_net(monkeypatch, call_fn=fake)
+        assert ev.cmd_update(self._args(all_day=True, start="2026-08-10", end="2026-08-12")) == 0
+        assert calls["patch"]["isAllDay"] is True
+        assert calls["patch"]["start"]["dateTime"] == "2026-08-10T00:00:00"
+        assert calls["patch"]["end"]["dateTime"] == "2026-08-13T00:00:00"
+
+    def test_update_all_day_timed_end_raises(self, monkeypatch):
+        """update 转全天时 --end 带时间 → 报错（格式混用说明用户搞错了）。"""
+        _mock_net(monkeypatch, call_fn=lambda *a, **k: _event())
+        with pytest.raises(CalError):
+            ev.cmd_update(self._args(all_day=True, start="2026-08-10", end="2026-08-12 18:00"))
+
+
+class TestCmdNext:
+    """next 命令路径（mock 网络）。
+
+    验证 /instances 查询不带 $top/$orderby（该端点对这两个参数有报错先例，
+    默认按开始时间升序返回，本地截断取第一条即可）。
+    """
+
+    def _args(self, **kw):
+        base = dict(event_id="M1")
+        base.update(kw)
+        return _args(**base)
+
+    def test_instances_url_no_top_no_orderby(self, monkeypatch):
+        """查询 URL 只带 start/end 和 $select，不带 $top/$orderby。"""
+        master = _event(id="M1", recurrence={"pattern": {"type": "daily", "interval": 1},
+                                             "range": {"type": "noEnd", "startDate": "2026-08-01"}})
+        monkeypatch.setattr(ev, "get_token", lambda: "tk")
+        monkeypatch.setattr(ev, "_call", lambda *a, **k: master)
+        seen = {}
+        def fake_get_all(url, token, prefer_immutable=False):
+            seen["url"] = url
+            return [_event(id="O1", seriesMasterId="M1")]
+        monkeypatch.setattr(ev, "_get_all", fake_get_all)
+        assert ev.cmd_next(self._args()) == 0
+        assert "$top" not in seen["url"] and "$orderby" not in seen["url"]
+        assert "startDateTime=" in seen["url"] and "$select=" in seen["url"]
+
 
 class TestCmdDelete:
     """delete 命令路径（mock 网络）。
@@ -466,8 +720,8 @@ class TestCmdDelete:
     验证单次/整系列的删除目标选择、输出文案、--json 结构化输出。
     """
 
-    def test_delete_occurrence(self, capsys, monkeypatch):
-        """删单次：DELETE 指向本次 ID，输出"移除本次出现"。"""
+    def test_delete_single(self, capsys, monkeypatch):
+        """删单次日程：DELETE 指向该 ID，输出中性文案（没有"其余出现"）。"""
         deleted = []
         def fake(method, endpoint, token, data=None, prefer_immutable=False):
             if method == "GET":
@@ -476,8 +730,24 @@ class TestCmdDelete:
             return None
         _mock_net(monkeypatch, call_fn=fake)
         assert ev.cmd_delete(_args(event_id="E1", yes=True, series=False)) == 0
-        assert "已从日历中移除本次出现" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "已从日历中移除「测试日程」" in out
+        assert "可找回" in out  # 软删除提示：Outlook 已删除项目可恢复
         assert deleted == ["/me/events/E1"]
+
+    def test_delete_occurrence(self, capsys, monkeypatch):
+        """删系列的一次出现：默认只删本次，输出"移除本次出现（其余保留）"。"""
+        occ = _event(id="O1", seriesMasterId="M1")
+        deleted = []
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            if method == "GET":
+                return occ
+            deleted.append(endpoint)
+            return None
+        _mock_net(monkeypatch, call_fn=fake)
+        assert ev.cmd_delete(_args(event_id="O1", yes=True, series=False)) == 0
+        assert "已从日历中移除本次出现" in capsys.readouterr().out
+        assert deleted == ["/me/events/O1"]
 
     def test_delete_series(self, capsys, monkeypatch):
         """删整个系列：--series 指向主事件，输出带"整个系列"警告语义。"""
@@ -488,10 +758,10 @@ class TestCmdDelete:
         assert "整个系列" in capsys.readouterr().out
 
     def test_english(self, capsys, monkeypatch, en):
-        """英文环境下的删除输出。"""
+        """英文环境下的删除输出（单次日程中性文案）。"""
         _mock_net(monkeypatch, call_fn=lambda *a, **k: _event())
         ev.cmd_delete(_args(event_id="E1", yes=True, series=False))
-        assert "Removed this occurrence" in capsys.readouterr().out
+        assert "Removed \"测试日程\" from the calendar" in capsys.readouterr().out
 
     def test_json_output(self, capsys, monkeypatch):
         """--json 模式下输出结构化结果，供程序消费。"""
@@ -590,3 +860,14 @@ class TestCmdList:
         out = capsys.readouterr().out
         data = json.loads(out)
         assert data[0]["subject"] == "测试日程"
+
+    def test_created_after_select_includes_reminder_fields(self, monkeypatch):
+        """--created-after 的 $select 必须含提醒字段，否则 --reminders 组合静默返回空。"""
+        seen = {}
+        def fake_get_all(url, token, prefer_immutable=False):
+            seen["url"] = url
+            return [_event(id="1", isReminderOn=True, reminderMinutesBeforeStart=15)]
+        monkeypatch.setattr(ev, "get_token", lambda: "tk")
+        monkeypatch.setattr(ev, "_get_all", fake_get_all)
+        ev.cmd_list(self._args(created_after="2026-08-06", reminders=True))
+        assert "isReminderOn" in seen["url"] and "reminderMinutesBeforeStart" in seen["url"]
