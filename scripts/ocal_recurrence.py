@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 
 from ocal_errors import CalError
 from ocal_i18n import t, get_lang, idx_name, weekday_names
+from ocal_time import LOCAL_TZ_NAME
 
 # 注意：Python weekday() 0=周一 ... 6=周日，这两个数组必须从周一对齐
 EN_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -223,6 +224,10 @@ def _build_recurrence(repeat, repeat_until, repeat_times, start_dt):
     recurrence, desc_cn = _parse_recurrence(repeat, start_dt)
     if not recurrence:
         raise CalError(t("err_repeat_unparseable", r=repeat))
+    # Graph 对定期事件若不显式指定 recurrenceTimeZone 会默认按 UTC 锚定循环，
+    # 结果 originalStartTimeZone=UTC 而 originalEndTimeZone=本地时区，Outlook
+    # 显示"开始是 UTC、结束是本地时间"。这里与 start/end 的 timeZone 保持一致
+    recurrence["range"]["recurrenceTimeZone"] = LOCAL_TZ_NAME
     if repeat_until is not None:
         try:
             until = datetime.strptime(repeat_until, "%Y-%m-%d")

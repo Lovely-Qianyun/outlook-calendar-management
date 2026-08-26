@@ -53,6 +53,7 @@ def _call(method, endpoint, token, data=None, prefer_immutable=False):
     if data:
         headers["Content-Type"] = "application/json"
     url = endpoint if endpoint.startswith("http") else f"{GRAPH_BASE}{endpoint}"
+    tz_stripped = False  # 时区头只允许剥一次，防止循环
     for attempt in range(4):  # 1 次初始 + 最多 3 次重试
         try:
             resp = requests.request(method, url, headers=headers, json=data, timeout=(10, 30))
@@ -85,20 +86,19 @@ def _call(method, endpoint, token, data=None, prefer_immutable=False):
                 code = err.get('code', '')
             except Exception:
                 msg, code = resp.text[:200], ''
-            # 防御：个别邮箱/时区名不支持 Prefer 头时 Graph 返回 400，去掉时区头重试一次
-            # （Graph 默认按 UTC 返回，_parse_dt 会自行换算成本地时间，显示结果一致）
+            # 防御：个别邮箱/时区名不支持 Prefer 头时 Graph 返回 400，去掉时区头后
+            # 走回主循环重发一次（同样经过 429/500/网络异常的重试与错误映射）；
+            # Graph 默认按 UTC 返回，_parse_dt 会自行换算成本地时间，显示结果一致
             tz_bad = ("timezone" in msg.lower() or "time zone" in msg.lower()
                       or "timezone" in code.lower())
-            if resp.status_code == 400 and tz_bad and "outlook.timezone" in headers.get("Prefer", ""):
+            if (resp.status_code == 400 and tz_bad and not tz_stripped
+                    and "outlook.timezone" in headers.get("Prefer", "")):
+                tz_stripped = True
                 headers["Prefer"] = headers["Prefer"].replace(f'outlook.timezone="{LOCAL_TZ_NAME}", ', "").replace(
                     f'outlook.timezone="{LOCAL_TZ_NAME}"', "")
                 if not headers["Prefer"].strip():
                     headers.pop("Prefer", None)
-                resp = requests.request(method, url, headers=headers, json=data, timeout=(10, 30))
-                if resp.status_code < 400:
-                    if resp.status_code == 204:
-                        return None
-                    return resp.json()
+                continue
             if code == 'ErrorOccurrenceCrossingBoundary':
                 raise CalError(t("err_crossing"))
             if code == 'ErrorItemNotFound':
@@ -118,7 +118,11 @@ def _get_all(url, token, prefer_immutable=False):
     :return: 各页 value 拼成的列表
     """
     items = []
-    while url:
+    pages = 0
+    while url and pages < 200:
+        # 200 页是防御性上限（正常日历远到不了）：nextLink 异常重复时
+        # 不会死循环，也不至于静默截断真实数据
+        pages += 1
         data = _call("GET", url, token, prefer_immutable=prefer_immutable)
         items.extend(data.get('value', []))
         url = data.get('@odata.nextLink')
