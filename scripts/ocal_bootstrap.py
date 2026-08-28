@@ -15,6 +15,18 @@ from ocal_i18n import t
 REQUIRED = ("requests", "msal", "tzdata")
 
 
+def harden_stdio():
+    """输出重定向到 GBK 等窄编码管道时（Windows cmd/管道常见），emoji 会抛
+    UnicodeEncodeError 直接崩；改成 replace 让它们退化成 ? 而不是崩溃。
+    UTF-8 终端与 --json 输出不受影响。仅用 stdlib，不依赖第三方库。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass  # Python < 3.7 或非文本流：保持原样
+
+
 def _missing():
     """看当前环境缺哪些依赖。
 

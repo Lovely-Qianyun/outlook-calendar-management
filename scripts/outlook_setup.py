@@ -10,8 +10,9 @@ Outlook 日历助手 — 一键认证脚本
 import json, time, os, sys
 import unicodedata
 
-from ocal_i18n import t
-from ocal_bootstrap import ensure_deps
+from ocal_i18n import t, set_lang
+from ocal_bootstrap import ensure_deps, harden_stdio
+from ocal_auth import SCOPES
 
 DEFAULT_CLIENT_ID = "cfec5685-f41e-4be9-80db-08eeddd763ba"  # Azure App: Agent Skill - Outlook Calendar Management
 
@@ -49,6 +50,8 @@ def main():
 
     放进 main() 而不是模块顶层，是为了 import 时不触发流程（_box 等函数可以单测）。
     """
+    set_lang()  # 文案跟随系统语言（与 outlook_cal.py 一致）；须在 ensure_deps 之前
+    harden_stdio()  # 窄编码管道（Windows GBK）下 emoji 输出不崩
     ensure_deps()
     from msal import PublicClientApplication
 
@@ -60,7 +63,7 @@ def main():
         auth_url = f"https://login.microsoftonline.com/{authority}"
         try:
             app = PublicClientApplication(client_id, authority=auth_url)
-            flow = app.initiate_device_flow(scopes=["Calendars.ReadWrite"])
+            flow = app.initiate_device_flow(scopes=list(SCOPES))
             if "user_code" in flow:
                 break
         except Exception:
@@ -92,8 +95,21 @@ def main():
         result["expires_at"] = time.time() + result.get("expires_in", 3600)
         result["_authority"] = authority
         result["client_id"] = client_id  # 存起来，续期时不需要再提供
-        with open(TOKEN_PATH, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False)
+        # 先写临时文件再原子替换：写入中途崩溃不会把 token 文件写坏成半截 JSON
+        tmp = TOKEN_PATH + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False)
+            try:
+                os.chmod(tmp, 0o600)  # token 含 access/refresh token，收紧权限
+            except OSError:
+                pass
+            os.replace(tmp, TOKEN_PATH)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
         claims = result.get("id_token_claims", {})
         account = claims.get("upn", claims.get("preferred_username", t("setup_your_account")))
         name = claims.get("name", "")
