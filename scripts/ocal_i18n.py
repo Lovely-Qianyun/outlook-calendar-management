@@ -580,19 +580,28 @@ def t(key, **fmt):
 def d_md(d):
     """短日期显示：zh 用 08月10日，en 用 08/10。
 
+    中文年月日用手工拼接而不是写进 strftime 格式串：Windows 上 Python 3.12
+    之前把格式串按 locale 编码传给 C 库，含中文的格式串会抛 UnicodeEncodeError。
+
     :param d: date/datetime 对象
     :return: 日期字符串
     """
-    return d.strftime("%m月%d日") if get_lang() == "zh" else d.strftime("%m/%d")
+    if get_lang() == "zh":
+        return f"{d.strftime('%m')}月{d.strftime('%d')}日"
+    return d.strftime("%m/%d")
 
 
 def d_ymd(d):
     """带年份的日期显示：2026年08月10日 / 2026-08-10。
 
+    中文年月日用手工拼接而不是写进 strftime 格式串，原因同 d_md。
+
     :param d: date/datetime 对象
     :return: 日期字符串
     """
-    return d.strftime("%Y年%m月%d日") if get_lang() == "zh" else d.strftime("%Y-%m-%d")
+    if get_lang() == "zh":
+        return f"{d.strftime('%Y')}年{d.strftime('%m')}月{d.strftime('%d')}日"
+    return d.strftime("%Y-%m-%d")
 
 
 def weekday(d):

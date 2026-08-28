@@ -71,7 +71,7 @@ outlook-calendar-management/
 
 ## 测试
 
-- **300 个离线单元测试**（pytest）：按功能模块覆盖，网络请求全部模拟（不联网、无需真实账户），可随时运行；GitHub Actions 在 Linux/Windows/macOS × Python 3.10/3.13 上自动执行
+- **307 个离线单元测试**（pytest）：按功能模块覆盖，网络请求全部模拟（不联网、无需真实账户），可随时运行；GitHub Actions 在 Linux/Windows/macOS × Python 3.10/3.13 上自动执行
 - **触发评估集**（`tests/trigger-eval.md`）：一整套"哪些话该触发这个 skill、哪些话不该触发"的样例。改动 SKILL.md 里的触发描述时用它对照检查，防止漏触发和误触发
 - **输出协议评估集**（`tests/protocol-eval.md` + `tests/test_protocol.py`）：agent 提取 🆔/时段/错误的规则被逐条固化，改输出格式不会悄悄破坏下游解析
 - **可选实机演练**：用真实 Outlook 账户执行 106 项检查，验证与真实服务的兼容性（需要专用测试账户，见 `tests/integration/`）

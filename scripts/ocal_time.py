@@ -664,7 +664,9 @@ def _relative_dt(s, now=None):
     :param now: 基准时刻，默认系统当前时间
     :return: naive datetime 或 None
     """
-    now = now or datetime.now()
+    # 基准用 LOCAL_TZ 而不是裸 datetime.now()：与显示/查询窗口共用同一时区基准，
+    # 避免系统墙钟与探测链结果不一致时"今天"差一天的极端情况
+    now = now or datetime.now(LOCAL_TZ)
     s = s.strip()
     # 1) 整串直接是日期词（今天 / day after tomorrow）
     day = _resolve_relative_date(s, now)

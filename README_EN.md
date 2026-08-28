@@ -71,7 +71,7 @@ outlook-calendar-management/
 
 ## Testing
 
-- **300 offline unit tests** (pytest): cover the functional modules; all network calls are mocked (no network, no real account needed), runnable anytime; GitHub Actions runs them on Linux/Windows/macOS × Python 3.10/3.13
+- **307 offline unit tests** (pytest): cover the functional modules; all network calls are mocked (no network, no real account needed), runnable anytime; GitHub Actions runs them on Linux/Windows/macOS × Python 3.10/3.13
 - **Trigger evaluation set** (`tests/trigger-eval.md`): a complete set of examples of what should trigger this skill and what shouldn't. When you change the trigger description in SKILL.md, check against it to prevent missed and false triggers
 - **Output-protocol evaluation set** (`tests/protocol-eval.md` + `tests/test_protocol.py`): the regexes agents use to extract 🆔 / free slots / errors are pinned one by one, so output-format changes can't silently break downstream parsing
 - **Optional live dry-runs**: 106 checks against a real Outlook account to verify compatibility with the real service (requires a dedicated test account; see `tests/integration/`)

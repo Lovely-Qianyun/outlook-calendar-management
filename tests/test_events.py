@@ -498,6 +498,17 @@ class TestCmdAdd:
         ev.cmd_add(self._args(remind=10))
         assert calls["data"]["isReminderOn"] is True
 
+    def test_body_passed_as_graph_body(self, monkeypatch):
+        """add -b 备注 → Graph 的 event.body（contentType=text），read/list 都能用。"""
+        calls = {}
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            calls["data"] = data
+            return _event()
+        _mock_net(monkeypatch, call_fn=fake)
+        ev.cmd_add(self._args(body="记得带电脑"))
+        assert calls["data"]["body"] == {"contentType": "text", "content": "记得带电脑"}
+
+
     def test_conflict_warning_goes_to_stderr(self, capsys, monkeypatch):
         """冲突警告（含现有日程的 🆔 行）必须走 stderr，不能进 stdout 协议流。
 
