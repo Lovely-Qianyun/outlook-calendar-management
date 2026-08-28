@@ -22,7 +22,7 @@ import argparse, json, sys
 
 from ocal_errors import CalError
 from ocal_i18n import t, set_lang
-from ocal_bootstrap import ensure_deps
+from ocal_bootstrap import ensure_deps, harden_stdio
 
 # ── 入口 ──────────────────────────────────────────
 
@@ -50,6 +50,8 @@ def main():
     """
     # 语言先于 argparse 生效：--lang > OCAL_LANG > 系统检测 > 默认 zh
     set_lang(_argv_lang(sys.argv[1:]))
+    # 窄编码管道（Windows GBK）下 emoji 输出不崩（见 harden_stdio）
+    harden_stdio()
     # 依赖自检必须在导入 ocal_events 之前（它经 ocal_graph 顶层 import requests，
     # 缺失依赖时会先崩在导入上，bootstrap 就没机会运行）
     ensure_deps()
@@ -117,7 +119,8 @@ def main():
 
     p_update = sub.add_parser("update", help=t("help_update"))
     _add_common(p_update)
-    p_update.add_argument("event_id", help=t("help_event_id"))
+    p_update.add_argument("event_id", nargs="?", help=t("help_event_id"))
+    p_update.add_argument("--search", help=t("help_search_target"))
     p_update.add_argument("--subject", help=t("help_new_subject"))
     p_update.add_argument("--start", help=t("help_new_start"))
     p_update.add_argument("--end", help=t("help_new_end"))
@@ -143,13 +146,15 @@ def main():
 
     p_delete = sub.add_parser("delete", help=t("help_delete"))
     _add_common(p_delete)
-    p_delete.add_argument("event_id", help=t("help_event_id"))
+    p_delete.add_argument("event_id", nargs="?", help=t("help_event_id"))
+    p_delete.add_argument("--search", help=t("help_search_target"))
     p_delete.add_argument("-y", "--yes", action="store_true", help=t("help_yes_delete"))
     p_delete.add_argument("--series", action="store_true", help=t("help_series"))
 
     p_move = sub.add_parser("move", help=t("help_move"))
     _add_common(p_move)
-    p_move.add_argument("event_id", help=t("help_event_id"))
+    p_move.add_argument("event_id", nargs="?", help=t("help_event_id"))
+    p_move.add_argument("--search", help=t("help_search_target"))
     p_move.add_argument("--days", type=int, help=t("help_move_days"))
     p_move.add_argument("--to", help=t("help_move_to"))
     p_move.add_argument("-y", "--yes", action="store_true", help=t("help_yes"))

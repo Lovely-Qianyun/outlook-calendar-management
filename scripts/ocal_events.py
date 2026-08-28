@@ -143,6 +143,62 @@ def _filter_events(events, search=None, category=None):
     return events
 
 
+def _search_candidates(search, token):
+    """按关键词在「过去 7 天 ~ 未来 30 天」窗口内搜索日程。
+
+    供 update/move/delete 的 --search 定位使用：返回匹配事件列表，
+    由调用方处理唯一匹配/多匹配/零匹配三种情形。
+
+    :param search: 关键词（匹配标题/地点/备注，不区分大小写）
+    :param token: 访问令牌
+    :return: 匹配的事件列表
+    """
+    now = datetime.now(LOCAL_TZ)
+    start = (now - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
+    end = (now + timedelta(days=30)).replace(hour=23, minute=59, second=59, microsecond=0).isoformat(timespec="seconds")
+    url = (f"/me/calendar/calendarView?startDateTime={quote(start, safe='')}&endDateTime={quote(end, safe='')}"
+           f"&$select={_EVENT_SELECT}&$orderby=start/dateTime")
+    events = _get_all(url, token, prefer_immutable=True)
+    return _filter_events(events, search=search)
+
+
+def _candidate_line(ev):
+    """搜索多匹配时，错误信息中的候选行：{时间} {标题} 🆔 {ID}（供 agent 指定目标）。"""
+    s_tz = ev['start'].get('timeZone')
+    if ev.get('isAllDay'):
+        time_str = all_day()
+    else:
+        time_str = _fmt(ev['start']['dateTime'], s_tz)
+    return f"    {time_str}  {ev.get('subject', '')}  🆔 {ev['id']}"
+
+
+def _resolve_target_id(args, token):
+    """确定 update/move/delete 的目标事件 ID。
+
+    给定 event_id 时直接使用；未给 event_id 但给了 --search 时，
+    在「过去 7 天 ~ 未来 30 天」窗口内搜索定位：唯一匹配直接返回其 ID，
+    零匹配 / 多匹配抛 CalError（多匹配时错误信息内列出候选的标题+时间+🆔）。
+    ID 与 search 均缺失时抛 err_id_required。
+
+    :param args: argparse 参数（event_id/search）
+    :param token: 访问令牌
+    :return: 事件 ID
+    :raises CalError: ID 与 search 均缺失 / 搜索零匹配 / 搜索多匹配
+    """
+    if args.event_id:
+        return args.event_id
+    search = getattr(args, 'search', None)
+    if not search:
+        raise CalError(t("err_id_required"))
+    matches = _search_candidates(search, token)
+    if not matches:
+        raise CalError(t("err_search_none", s=search))
+    if len(matches) > 1:
+        lines = "\n".join(_candidate_line(e) for e in matches)
+        raise CalError(t("err_search_multi", s=search, list=lines))
+    return matches[0]["id"]
+
+
 _IMPORTANCE_MAP = {"低": "low", "普通": "normal", "高": "high"}
 
 
@@ -523,11 +579,10 @@ def cmd_update(args):
     token = get_token()
     if not token:
         raise CalError(t("err_auth_first"))
-    if not args.event_id:
-        raise CalError(t("err_id_required"))
+    event_id = _resolve_target_id(args, token)
 
     # 读取原事件
-    data = _call("GET", f"/me/events/{quote(args.event_id, safe='')}", token, prefer_immutable=True)
+    data = _call("GET", f"/me/events/{quote(event_id, safe='')}", token, prefer_immutable=True)
     was_all_day = data.get('isAllDay', False)
 
     # 收集要修改的字段
@@ -682,7 +737,7 @@ def cmd_update(args):
             print(t("cancel"))
             return 1
 
-    result = _call("PATCH", f"/me/events/{quote(args.event_id, safe='')}", token, patch, prefer_immutable=True)
+    result = _call("PATCH", f"/me/events/{quote(event_id, safe='')}", token, patch, prefer_immutable=True)
     if is_json:
         print(json.dumps(result, ensure_ascii=False))
         return 0
@@ -803,15 +858,14 @@ def cmd_delete(args):
     token = get_token()
     if not token:
         raise CalError(t("err_auth_first"))
-    if not args.event_id:
-        raise CalError(t("err_id_required"))
+    event_id = _resolve_target_id(args, token)
 
-    data = _call("GET", f"/me/events/{quote(args.event_id, safe='')}", token, prefer_immutable=True)
+    data = _call("GET", f"/me/events/{quote(event_id, safe='')}", token, prefer_immutable=True)
     master_id = data.get('seriesMasterId')
     is_master = data.get('recurrence') is not None
 
     # 确定删除目标：单次出现（默认）还是整个系列
-    target_id = args.event_id
+    target_id = event_id
     if master_id:
         if args.series:
             target_id = master_id
@@ -826,7 +880,7 @@ def cmd_delete(args):
                 return 1
             if ans in ("2", "系列", "s", "series"):
                 target_id = master_id
-    deleting_series = target_id != args.event_id or is_master
+    deleting_series = target_id != event_id or is_master
 
     # 确认（--yes 或 --json 跳过）
     if not getattr(args, 'yes', False) and not is_json:
@@ -872,8 +926,7 @@ def cmd_move(args):
     token = get_token()
     if not token:
         raise CalError(t("err_auth_first"))
-    if not args.event_id:
-        raise CalError(t("err_id_required"))
+    event_id = _resolve_target_id(args, token)
     if args.days is not None and args.to is not None:
         raise CalError(t("err_days_to"))
     if args.days is None and args.to is None:
@@ -881,7 +934,7 @@ def cmd_move(args):
     if args.days == 0:
         raise CalError(t("err_move_zero"))
 
-    data = _call("GET", f"/me/events/{quote(args.event_id, safe='')}", token, prefer_immutable=True)
+    data = _call("GET", f"/me/events/{quote(event_id, safe='')}", token, prefer_immutable=True)
 
     # 计算新起止：保留原时段与时长，只移动日期
     if data.get('isAllDay'):
@@ -935,7 +988,7 @@ def cmd_move(args):
             print(t("cancel"))
             return 1
 
-    result = _call("PATCH", f"/me/events/{quote(args.event_id, safe='')}", token, patch, prefer_immutable=True)
+    result = _call("PATCH", f"/me/events/{quote(event_id, safe='')}", token, patch, prefer_immutable=True)
     if is_json:
         print(json.dumps(result, ensure_ascii=False))
     else:

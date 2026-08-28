@@ -861,3 +861,79 @@ class TestCmdList:
         monkeypatch.setattr(ev, "_get_all", fake_get_all)
         ev.cmd_list(self._args(created_after="2026-08-06", reminders=True))
         assert "isReminderOn" in seen["url"] and "reminderMinutesBeforeStart" in seen["url"]
+
+
+class TestSearchTarget:
+    """update/move/delete 的 --search 定位（_resolve_target_id，找+改合并为一次调用）。"""
+
+    def _args(self, **kw):
+        """构造 update/move/delete 的参数：event_id/search 均可选，其余字段按命令需要显式传。"""
+        base = dict(event_id=None, search=None, yes=True, json=False,
+                    subject=None, start=None, end=None, all_day=None, location=None,
+                    body=None, category=None, importance=None, private=None, busy=None,
+                    remind=None, no_remind=False, repeat=None, repeat_until=None,
+                    repeat_times=None, days=None, to=None, series=False)
+        base.update(kw)
+        return _args(**base)
+
+    def test_update_unique_match(self, monkeypatch):
+        """唯一匹配：update --search 直接命中目标并更新，无需先 list。"""
+        calls = {}
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            if method == "GET":
+                return _event(subject="周会")
+            calls["patch"] = data
+            return _event(subject="x")
+        _mock_net(monkeypatch, call_fn=fake,
+                  get_all=lambda *a, **k: [_event(id="E1", subject="周会")])
+        assert ev.cmd_update(self._args(search="周会", subject="新周会")) == 0
+        assert calls["patch"]["subject"] == "新周会"
+
+    def test_delete_unique_match(self, monkeypatch):
+        """唯一匹配：delete --search 直接命中并删除目标事件。"""
+        deleted = []
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            if method == "DELETE":
+                deleted.append(endpoint)
+                return {}
+            return _event(subject="聚餐")
+        _mock_net(monkeypatch, call_fn=fake,
+                  get_all=lambda *a, **k: [_event(id="E1", subject="聚餐")])
+        assert ev.cmd_delete(self._args(search="聚餐")) == 0
+        assert deleted and "E1" in deleted[0]
+
+    def test_move_unique_match(self, monkeypatch):
+        """唯一匹配：move --search 直接命中并移动目标事件。"""
+        calls = {}
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            if method == "PATCH":
+                calls["patch"] = data
+                return _event(subject="站会")
+            return _event(subject="站会")
+        _mock_net(monkeypatch, call_fn=fake,
+                  get_all=lambda *a, **k: [_event(id="E1", subject="站会")])
+        assert ev.cmd_move(self._args(search="站会", days=1)) == 0
+        assert calls["patch"]
+
+    def test_search_multiple_raises_with_candidates(self, monkeypatch):
+        """多匹配：报错并列出候选（含 🆔），不执行任何操作。"""
+        _mock_net(monkeypatch,
+                  get_all=lambda *a, **k: [_event(id="E1", subject="周会"),
+                                           _event(id="E2", subject="周会")])
+        with pytest.raises(CalError) as ei:
+            ev.cmd_delete(self._args(search="周会"))
+        msg = str(ei.value)
+        assert "E1" in msg and "E2" in msg
+
+    def test_search_none_raises(self, monkeypatch):
+        """零匹配：报错提示换关键词或扩大范围。"""
+        _mock_net(monkeypatch, get_all=lambda *a, **k: [])
+        with pytest.raises(CalError):
+            ev.cmd_update(self._args(search="不存在的日程"))
+
+    def test_no_id_no_search_raises(self, monkeypatch):
+        """event_id 与 --search 均缺失：报 err_id_required。"""
+        _mock_net(monkeypatch)
+        with pytest.raises(CalError) as ei:
+            ev.cmd_delete(self._args())
+        assert "事件ID不能为空" in str(ei.value)

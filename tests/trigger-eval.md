@@ -1,15 +1,15 @@
 # 触发评估集
 
-验证 SKILL.md 的 description 能否正确触发 skill。每次改 description 前后各跑一遍，防止漏触发和误触发。
+用于验证 SKILL.md 的 description 能否正确触发 skill。每次修改 description 前后各运行一遍，以防漏触发与误触发。
 
-## 怎么用
+## 使用方法
 
 对每条提示词，在一个**全新会话**里原样提问，观察 agent 是否加载了本 skill 的指令：
 
-- should-trigger 全部命中，说明没有漏触发
-- should-not-trigger 全部不命中，说明没有误触发
-- 漏触发 → description 补用户会自然说出的关键词
-- 误触发 → description 加排除条件，或把场景写进"不用于"部分
+- should-trigger 全部命中，说明无漏触发
+- should-not-trigger 全部不命中，说明无误触发
+- 漏触发时，在 description 中补充用户自然使用的关键词
+- 误触发时，在 description 中增加排除条件，或将场景写入"不用于"部分
 
 期望标准：should-trigger 12/12，should-not-trigger 6/6。
 
@@ -43,8 +43,8 @@
 
 ## 核对当前 description
 
-改 description 时对照这张表逐条过：每个 should-trigger 场景都要有对应的触发词，每个 should-not-trigger 场景都要有排除依据。当前 description 的触发词覆盖情况：
+修改 description 时，对照此表逐条检查：每个 should-trigger 场景均须有对应的触发词，每个 should-not-trigger 场景均须有排除依据。当前 description 的触发词覆盖情况如下：
 
 - 查看安排 / 查找 / 添加 / 改 / 挪 / 删除 / 空闲 / 下次 / 最近加的 → 覆盖 should-trigger 全部 12 条
-- 不用于邮件（himalaya 负责）和其他日历 → 覆盖 should-not-trigger 的 1-4 条
-- 5、6 条靠"日程操作"的语义约束兜底，如果出现误触发，把这两类场景写进 description 的排除部分
+- 不用于邮件（himalaya 负责）和其他日历 → 覆盖 should-not-trigger 的第 1-4 条
+- 第 5、6 条依赖"日程操作"的语义约束兜底；若出现误触发，应将这两类场景写入 description 的排除部分
