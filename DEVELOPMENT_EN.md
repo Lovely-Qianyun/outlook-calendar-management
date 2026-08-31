@@ -32,7 +32,7 @@ tests/
   trigger-eval.md       # Trigger evaluation set: verify trigger/no-trigger when changing description
   protocol-eval.md      # Output-protocol evaluation set: 11 end-to-end extraction cases, verified in fresh sessions
   integration/          # Optional: live dry-runs against a real account; needs a dedicated test account, see its README
-    drill.sh            # 100 behavior assertions, Chinese output
+    drill.sh            # 106 behavior assertions, Chinese output
     drill-en.sh         # Same, English output
     README.md           # Usage and warnings
 
@@ -65,7 +65,7 @@ references/             # User documentation
 
 ## Change conventions
 
-- Before changing output, read the output-protocol section and assess whether downstream parsing might break. zh/en copy is pinned verbatim by tests, so any change requires syncing the assertions in both languages and bumping the y version - do not change it casually. Established display habits such as `每周周五` (weekly Friday) remain as-is and must not be "fixed"
+- Before changing output, read the output-protocol section and assess whether downstream parsing might break. zh/en copy is pinned verbatim by tests, so any change requires syncing the assertions in both languages and bumping the y version - do not change it casually. Established display habits such as `每周五` (weekly Friday) remain as-is and must not be "fixed"
 - After refactoring, run the regression suite (see Testing); offline tests must all pass and, when the protocol changed, the live drill must hit 106/106
 - When adding behavior, update the assertions in `tests/` in sync - in both language versions; output-format changes must also sync `tests/protocol-eval.md` and `test_protocol.py`
 
@@ -80,7 +80,7 @@ references/             # User documentation
 - All user-visible text - print / CalError / input prompts - goes through `ocal_i18n.t()`; never hardcode Chinese
 - Language priority: `--lang` argument > `OCAL_LANG` environment variable > system-language detection (zh for Chinese systems, en otherwise)
 - emoji anchors 🆔/✅/⚠️/🆕 etc. are part of the output protocol: the 🆔 line is the event ID, extracted by both scripts and agents; both languages share the same anchors, never translated; `--json` output is language-independent
-- **Natural-language copy is NOT part of the protocol**: the protocol only promises anchors, indentation, colon/parenthesis structure, and slot/JSON formats; in-line copy (e.g. `系列主事件ID`, `确认?`, `无空闲时段`) follows the language and agents must not depend on specific copy
+- **Natural-language copy is NOT part of the protocol**: the protocol only promises anchors, indentation, colon/parenthesis structure, and slot/JSON formats; in-line copy (e.g. `系列主事件ID` (Series master event ID), `确认?` (Confirm?), `无空闲时段` (no free slots)) follows the language and agents must not depend on specific copy
 - Dates/weekdays use runtime functions like `d_md`/`date_weekday`/`weekday`. The language isn't decided until after module import, so these can't be constants
 - New copy must fill both the zh and en tables; a missing key falls back to Chinese, then to the key name, making missed translations obvious during development
 
@@ -111,10 +111,10 @@ The human-readable output of commands forms a stable protocol that agents and sc
 
 ### Line structure
 
-- Each list item takes two lines: `    {图标} {时间}  {标题}{定期标记}{类别}` (icon / time / subject / recurrence mark / category), followed by `    🆔 {ID}`
+- Each list item takes two lines: `    {icon} {time}  {subject}{recurrence-mark}{category}`, followed by `    🆔 {ID}`
 - The recurrence mark is 🔁 plus a parenthesized suffix (copy follows the language: zh `(系列)`/`(已修改)`/`(已取消)`, en `(series)` etc.); the series master line additionally ends with the rule description
 - read's ID line: `🆔 {ID}`; series context: `🆕 {copy}: {ID}` - the anchor+colon structure is the protocol, the copy before the colon follows the language (zh `系列主事件ID`, en `Series master event ID`)
-- Each free line: `📅 {日期} {星期}：{内容}` (date / weekday: content); HH:MM-HH:MM slots present = partially free, no slots = free all day or no free slots (distinguishing them needs copy or `--json`)
+- Each free line: `📅 {date} {weekday}: {content}`; HH:MM-HH:MM slots present = partially free, no slots = free all day or no free slots (distinguishing them needs copy or `--json`)
 
 ### Time and dates
 
@@ -200,7 +200,7 @@ The decisions below are scattered throughout the code and are hard to spot witho
 18. **today/tomorrow/week reuse cmd_list**. They mutate args in place with setattr and call it - no duplicated logic
 19. **For all-day reminders, N is "days"**; for timed reminders, N is "minutes". Cap: 1826 days = 2629800 minutes. In update, judge by the **resulting** type - `--no-all-day --remind N` must treat N as minutes
 20. **Multi-day all-day events**. add/update take an end date to span multiple days (inclusive; Graph's end stores the day after the last day at 00:00). An end with a time in the all-day branch is an error - never silently truncate to one day
-21. **Emoji output degrades instead of crashing on narrow-encoding pipes**. Trigger: the Chinese Windows console codepage is GBK (cp936); once stdout is redirected or piped (e.g. `python outlook_cal.py list > out.txt`, `... | findstr 周会`), the encoding becomes GBK and `print("📅 08月10日")` raises `UnicodeEncodeError: 'gbk' codec can't encode character '\U0001f4c5'` - the program crashes with exit code 1 and the whole result is lost. harden_stdio() in main() switches the stdout/stderr error handler to replace: emoji degrade to `?` placeholders while dates, subjects, and 🆔 IDs (ASCII) still print, so agent parsing is unaffected. UTF-8 terminals encode emoji fine and never hit this; --json output is pure ASCII and isn't involved
+21. **Emoji output degrades instead of crashing on narrow-encoding pipes**. Trigger: the Chinese Windows console codepage is GBK (cp936); once stdout is redirected or piped (e.g. `python outlook_cal.py list > out.txt`, `... | findstr meeting`), the encoding becomes GBK and `print("📅 08月10日")` raises `UnicodeEncodeError: 'gbk' codec can't encode character '\U0001f4c5'` - the program crashes with exit code 1 and the whole result is lost. harden_stdio() in main() switches the stdout/stderr error handler to replace: emoji degrade to `?` placeholders while dates, subjects, and 🆔 IDs (ASCII) still print, so agent parsing is unaffected. UTF-8 terminals encode emoji fine and never hit this; --json output is pure ASCII and isn't involved
 22. **All-day events are written in the mailbox's preferred timezone**. When the computer's timezone differs from the mailbox's, all-day events written in the computer's timezone span two days in Outlook. setup now requests Calendars.ReadWrite + MailboxSettings.Read (sign-in additionally requires the User.Read base permission); once per process we read /me/mailboxSettings timeZone. **Old tokens without this permission silently fall back to the local timezone** (same behavior as before), but users should re-run setup; status shows a hint line when the two differ
 23. **Token renewal takes a cross-process lock**. Trigger: after the token expires, two terminals (or a terminal plus a scheduled task) run commands at the same time, so both processes refresh the token and both write `~/.outlook_cal_token.json`. Without the lock the writes interleave - one process truncates/writes half while the other writes - corrupting the file: every subsequent command's `json.load` raises `JSONDecodeError`, all commands fail instantly, and the only remedy is to delete the token file and re-authenticate. Fix: before refreshing, take a lock (fcntl/msvcrt, non-blocking - skip if unavailable) and double-check the token file: two terminals refreshing concurrently won't duplicate requests or interleave writes. If the lock can't be taken, another process is mid-refresh, so skip the refresh and re-read the token it just wrote. Even if both refresh tokens end up valid, last-writer-wins and correctness is unaffected
 24. **Deletion hints recoverability**. Graph deletions land in Outlook's Deleted Items and stay recoverable for a while; a hint line follows the delete success message, easing the user's concern about accidental deletion
