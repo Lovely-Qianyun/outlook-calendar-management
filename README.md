@@ -1,6 +1,10 @@
+🌐 English | [中文](README.zh-CN.md)
+
 # Outlook Calendar Assistant
 
-A toolkit that lets an AI assistant (agent) manage your Outlook calendar (Microsoft account / outlook.com) through conversation. Just express a need (e.g. "what times are free on Friday afternoon?" or "move the weekly sync to Wednesday") and the AI handles the rest: view, add, modify, move, and delete events, including recurring events (e.g. a meeting that repeats every Monday) and free-time lookup. No need to open the Outlook app - your calendar stays in sync across phone, computer, and web.
+*Chat-driven Outlook calendar management for AI agents: events, recurring series, free-time lookup — local, official Graph API, no MCP server.*
+
+Let your AI assistant run your Microsoft Outlook calendar just by chatting. View, add, edit, move and delete events, manage recurring series, and find free time slots — all through natural language. A pure-local Python tool built on the official Microsoft Graph API (personal outlook.com / Microsoft 365 accounts), with one-time device-code login that renews automatically. No external MCP server, no background service. Timezone-aware, understands relative times like "next Tuesday 3pm", and answers in English or Chinese.
 
 ## Features
 
@@ -57,31 +61,6 @@ The overall design idea is simple: **output is always predictable and verifiable
 - **All-day events are written in the mailbox's preferred timezone**: they never span two days in Outlook even when the computer's timezone differs from the account's (after upgrading, re-run `python outlook_setup.py` once to grant the new permission)
 - **Output follows a fixed "protocol" - machines never misread it**: the output format is fixed - every event's ID always appears on the line starting with 🆔 (e.g. `AAMkAD...` in the examples), and times, locations, categories, etc. have fixed formats and markers. These markers (emoji anchors) are language-independent - Chinese and English output share the same set - so agents and scripts parse reliably in any language. For programmatic use (e.g. your own scripts), append `--json` for clean JSON output with no human-oriented text mixed in
 
-## Project Structure
-
-```
-outlook-calendar-management/
-├── SKILL.md            # Agent operation manual, Chinese (when to trigger + how to use)
-├── SKILL_EN.md         # Same, English
-├── DEVELOPMENT.md      # Developer docs: output protocol, design decisions, testing approach
-├── scripts/            # All implementation (pure Python, no framework)
-├── tests/              # Unit tests + trigger evaluation set + optional live dry-runs
-└── references/         # User docs: command reference, recurring events, configuration, troubleshooting
-```
-
-## Testing
-
-- **307 offline unit tests** (pytest): cover the functional modules; all network calls are mocked (no network, no real account needed), runnable anytime; GitHub Actions runs them on Linux/Windows/macOS × Python 3.10/3.13
-- **Trigger evaluation set** (`tests/trigger-eval.md`): a complete set of examples of what should trigger this skill and what shouldn't. When you change the trigger description in SKILL.md, check against it to prevent missed and false triggers
-- **Output-protocol evaluation set** (`tests/protocol-eval.md` + `tests/test_protocol.py`): the regexes agents use to extract 🆔 / free slots / errors are pinned one by one, so output-format changes can't silently break downstream parsing
-- **Optional live dry-runs**: 106 checks against a real Outlook account to verify compatibility with the real service (requires a dedicated test account; see `tests/integration/`)
-
 ## Development
 
-To contribute, start with `DEVELOPMENT.md` - it covers the full output protocol, key design decisions, i18n (internationalization) conventions, and official Graph API documentation links.
-
-Core principles:
-
-- **Never break the output protocol**: the output format is a contract that users and scripts depend on; change it with extreme care
-- **Keep zh output word-for-word stable**: the copy is pinned by tests verbatim; changes require syncing the test assertions and bumping the version number - do not change it casually
-- **Run regression before changing behavior**: whenever behavior changes, run the full test suite first to make sure nothing is broken
+For development, start with [DEVELOPMENT_EN.md](DEVELOPMENT_EN.md) — it covers the full output protocol, key design decisions, i18n conventions, and testing.
