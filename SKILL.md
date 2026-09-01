@@ -1,99 +1,98 @@
 ---
 name: outlook-calendar-management
-description: "当用户提到 Outlook 日历/微软日历的任何日程操作时使用本 skill：查看安排、查找日程（标题/地点/类别）、添加会议/生日/提醒、改时间或标题、挪到其他日期、删除（定期日程单次或整系列）、查空闲时段、查定期日程下次时间、按添加时间查最近加的。管理 Outlook 日历（微软账户 / outlook.com）日程。不处理 Outlook 邮件（himalaya skill 负责）和其他日历（Google 日历等）。"
+description: "Use this skill whenever the user mentions any calendar operation on Outlook calendar / Microsoft calendar: view schedules, find events (title/location/category), add meetings/birthdays/reminders, change time or title, move to another date, delete (single occurrence or whole recurring series), check free time slots, query the next occurrence of a recurring event, list recently added events. Manages the Outlook calendar (Microsoft account / outlook.com). Does NOT handle Outlook mail (the himalaya skill does) or other calendars (Google Calendar etc.)."
 license: "MIT"
 metadata:
   version: 2.2.0
 ---
 
-# Outlook 日历助手
+# Outlook Calendar Assistant
 
-通过对话管理 Outlook 日历（微软账户 / outlook.com），无需打开 Outlook 应用，手机、电脑、网页实时同步。
+Manage your Outlook calendar (Microsoft account / outlook.com) through conversation - no need to open the Outlook app. Calendar stays in sync across phone, computer, and web.
 
-## 能做什么
+## What It Can Do
 
-| 你想做什么 | 做法 |
+| What you want | How |
 |---|---|
-| 看安排：今天/明天/本周/某段时间 | `today` / `tomorrow` / `week` / `list` |
-| 找日程：按标题/地点/备注/类别 | `list --search` / `list --category` |
-| 查"我昨天加了什么" | `list --created-after 日期` |
-| 加日程：会议/生日/提醒/定期 | `add` |
-| 改日程：时间/标题/类别/提醒等 | `update` |
-| 挪日程：整体平移或移到某天，保留时段 | `move` |
-| 删日程，定期日程可选单次/整系列 | `delete` |
-| 问哪天有空 / 空闲时段 | `free` |
-| 定期日程下次什么时候 | `next` |
-| 看某个日程的详情 | `read` |
-| 日历连不上 / 查看状态 | `status` |
-| 机器可读输出，供程序/脚本用 | 任意命令加 `--json` |
+| See your schedule: today/tomorrow/this week/a time range | `today` / `tomorrow` / `week` / `list` |
+| Find events: by title/location/notes/category | `list --search` / `list --category` |
+| Query "what did I add yesterday" | `list --created-after <date>` |
+| Add events: meetings/birthdays/reminders/recurring | `add` |
+| Modify events: time/title/category/reminder etc. | `update` |
+| Move events: shift by days or to a date, keep the time slot | `move` |
+| Delete events; recurring events: single occurrence or whole series | `delete` |
+| Ask when someone is free / free time slots | `free` |
+| Next occurrence of a recurring event | `next` |
+| View an event's details | `read` |
+| Calendar unreachable / check status | `status` |
+| Machine-readable output for programs/scripts | append `--json` to any command |
 
-> 小输出优先：只看"有什么/什么时候"用 `list --summary` 或 `--json`，不要动辄拉全量；不确定时间范围先用默认 7 天。
+> Prefer small output: for "what/when" questions use `list --summary` or `--json` instead of pulling full details; when unsure about the time range, start with the default 7 days.
 
-## 操作铁律
+## Iron Rules
 
-以下规则适用于每次操作，不可跳过：
+The following rules apply to every operation - never skip them:
 
-1. **每次操作前先取"当前时间 + 当前时区"**：**任何操作开始前**，先用命令行获取系统当前时间和时区——Windows（PowerShell）用 `Get-Date` + `Get-TimeZone`，Linux/macOS 用 `date`（如 `date +"%F %T %Z"`），**绝不用旧会话里见过的日期或时区**。需要核对"今天是几号"时可配合运行 `status`（输出里有当前日期，含年份与星期）。相对时间词可以直接传给命令（`今天 14:00`、`本周五 15:00`、`今天下午2点`），命令会在运行时刻按系统时钟解析，输出里会显示解析后的日期——确认不是昨天
-2. **删除前先确认**：向用户复述待删除的日程（标题+时间），获得明确同意后再执行
-3. **修改前先查看现状**：先执行 `read` 获取当前内容，再决定修改内容
-4. **事件 ID 仅从输出获取**：命令输出中的 🆔 行即事件 ID，严禁猜测或编造
-5. **操作后回读验证再汇报**：add/update/move/delete 执行后，用 `read`/`list` 回读一次核对实际结果（标题+时间），确认与意图一致后再向用户汇报；不能只凭命令返回值就断言"已完成"
-6. **失败不盲目重试**：命令非零退出时，先读 ❌ 行（`--json` 时读 error 字段），按提示处理——权限/登录问题 → 重跑 `python outlook_setup.py`；查不到 → 扩大时间范围或换搜索词；严禁原样重试同一命令。仍无法解决时对照 `references/troubleshooting.md` 处理，或如实上报用户
+1. **Fetch "current time + current timezone" before every operation**: **before any operation begins**, run a command to get the system's current time and timezone - Windows (PowerShell): `Get-Date` + `Get-TimeZone`; Linux/macOS: `date` (e.g. `date +"%F %T %Z"`). **Never use dates or timezones seen in an earlier session.** To cross-check "what day is today", also run `status` (its output includes the current date with year and weekday). Relative time words can be passed to commands directly (`today 14:00`, `this Friday 15:00`); the command resolves them against the system clock at run time and the output shows the resolved date - verify it is not yesterday
+2. **Confirm before deleting**: restate the event to delete (title + time) to the user and obtain explicit consent before executing
+3. **Read before modifying**: run `read` to get the current content first, then decide what to change
+4. **Event IDs come only from output**: the 🆔 line in command output is the event ID - never guess or fabricate
+5. **Verify by reading back, then report**: after add/update/move/delete, run `read`/`list` once to verify the actual result (title + time) matches the intent, then report to the user; never claim "done" based only on the command's return value
+6. **Don't retry blindly on failure**: when a command exits non-zero, first read the ❌ line (the error field in `--json` mode), then act on the hint - permission/login issues → re-run `python outlook_setup.py`; not found → widen the time range or change the search term; never re-run the exact same command. If still stuck, follow `references/troubleshooting.md` or report honestly to the user
 
-## 输出契约
+## Output Contract
 
-命令输出是 agent 与脚本的接口，只依赖结构，不依赖文案：
+Command output is the interface between the agent and the scripts - rely on structure only, never on copy:
 
-1. **锚点 + 结构提取**：🆔/✅/⚠️/🆕 锚点、缩进、`HH:MM-HH:MM` 时段、JSON 结构是语言无关的协议；行内文案随语言，不作为提取依据
-2. **事件 ID 仅从 🆔 行获取**（严禁猜测/编造）；定期系列主事件 ID 从 🆕 行取（"🆕 + 冒号"结构，冒号前文案随语言）
-3. **失败信号**：退出码 1 + stderr `❌` 行；`--json` 时 stdout 为 `{"error": ..., "exit": 1}`
-4. **程序化/批量场景一律加 `--json`**：stdout 纯净 JSON，无人类提示混入
+1. **Extract by anchor + structure**: 🆔/✅/⚠️/🆕 anchors, indentation, `HH:MM-HH:MM` slots, and JSON structure form the language-independent protocol; in-line copy follows the language and is never an extraction basis
+2. **Event IDs come only from the 🆔 line** (never guess/fabricate); the recurring series master event ID comes from the 🆕 line (the "🆕 + colon" structure; copy before the colon follows the language)
+3. **Failure signals**: exit code 1 + a `❌` line on stderr; in `--json` mode stdout carries `{"error": ..., "exit": 1}`
+4. **Always use `--json` for programmatic/batch scenarios**: stdout is pure JSON with no human-oriented text mixed in
 
-## 常见任务
+## Common Tasks
 
-### "看看我这周/下周的安排"
-→ `week` 看本周，`list --days 7` 看未来 7 天。想看更久用 `list --days 30`；看过去的用 `list --past 30`。
+### "What's my schedule this week / next week?"
+→ `week` for this week, `list --days 7` for the next 7 days. Use `list --days 30` for longer; `list --past 30` for the past.
 
-### "我昨天加的那件事，改到今天"
-→ ① `list --created-after <昨天的日期>` 找到它，记下 🆔 → ② `read` 确认是这件 → ③ `move <ID> --days 1`（或 `--to 今天`，保留原时段）→ ④ 回读核对后告诉用户"已从昨天 X 点改到今天 X 点"。关键词足够独特时也可一步完成：`move --search "关键词" --days 1`（唯一匹配直接操作，多匹配会列出候选）。
+### "That thing I added yesterday - move it to today"
+→ ① `list --created-after <yesterday's date>` to find it, note the 🆔 → ② `read` to confirm it's the right one → ③ `move <ID> --days 1` (or `--to today`, keeping the original time slot) → ④ verify by reading back, then tell the user "moved from yesterday X to today X". When the keyword is distinctive enough, do it in one step: `move --search "keyword" --days 1` (a unique match operates directly; multiple matches list candidates).
 
-### "加一个周五下午的会，提前10分钟提醒"
-→ `add "会议名" "本周五 15:00" "本周五 16:00" --remind 10`。
-"今天下午两点的会" → `add "会议名" "今天 14:00" "今天 15:00"`。相对时间词由命令按系统当前日期解析，输出会显示具体日期，确认无误即可。只给日期没给具体时间会按全天处理；默认会提示时间冲突，不阻断。
+### "Add a meeting on Friday afternoon with a 10-minute reminder"
+→ `add "Meeting name" "this Friday 15:00" "this Friday 16:00" --remind 10`.
+"A meeting at 2 pm today" → `add "Meeting name" "today 14:00" "today 15:00"`. Relative time words are resolved by the command against the system's current date; the output shows the concrete date - confirm it's correct. A date without a time is treated as all-day; time conflicts are flagged as a warning, not a blocker, by default.
 
-### "把每周例会改成周三"
-→ 定期日程的"每次"和"整个系列"是两回事：先 `read` 拿系列主事件 ID（🆕 行）→ `update <主ID> --repeat "每周三"`。注意：改系列规则会重置之前单独改过的某几次，先提醒用户。
+### "Change the weekly sync to Wednesday"
+→ For recurring events, "this occurrence" and "the whole series" are different things: first `read` to get the series master event ID (🆕 line) → `update <masterID> --repeat "every wednesday"`. Note: changing the series rule resets any occurrences that were individually modified before - warn the user first.
 
-### "周五下午几点有空"
-→ `free "2026-08-14" --from 09:00 --to 18:00`，会列出空闲时间段。
+### "What time am I free on Friday afternoon?"
+→ `free "2026-08-14" --from 09:00 --to 18:00` lists the free time slots.
 
-### "周五那个会找不到了"
-→ ① `list --search "会议"` 无结果时，先确认搜索词与时间范围（默认只查未来 7 天）→ ② 用 `list --days 14` 或 `--past` 扩大范围 → ③ 仍无则如实告诉用户"没找到"并给出建议，**不编造日程**。
+### "I can't find Friday's meeting"
+→ ① `list --search "meeting"` returns nothing - check the search term and time range first (default only covers the next 7 days) → ② widen with `list --days 14` or `--past` → ③ if still nothing, honestly tell the user "not found" and suggest alternatives - **never fabricate events**.
 
-### "日历连不上了 / 权限报错"
-→ ① 跑 `status` 确认连接与登录状态 → ② 提示 invalid_grant/401/403 时按 `references/troubleshooting.md` 处理（通常重跑 `python outlook_setup.py` 重新授权）→ ③ 网络问题可稍后重试一次，仍失败如实上报。
+### "Calendar unreachable / permission error"
+→ ① run `status` to confirm the connection and login state → ② on invalid_grant/401/403 follow `references/troubleshooting.md` (usually re-run `python outlook_setup.py` to re-authorize) → ③ for network issues, one retry after a moment is fine; if it still fails, report honestly.
 
-## 关键概念
+## Key Concepts
 
-- **定期日程**（每周例会、每月 15 日……）：对"某一次"执行的修改/删除仅影响该次；修改规则、删除整个系列须操作**主事件**。详见 `references/recurring-events.md`
-- **运行环境**：Windows / Linux / macOS 均可；命令示例中的 `python` 在部分系统（如 macOS）为 `python3`，按实际解释器名运行即可
-- **时间输入**：时段用 `YYYY-MM-DD HH:MM`（"下午3点" = `15:00`），全天只给日期；支持相对时间（`今天`/`明天`/`本周X`/`下周X` 及英文 `today`/`this friday` 等，可带时刻），由命令按运行时刻系统时钟解析——**不要自己推算日期**（完整约定见 `references/commands.md`）。时区自动按电脑本地时区处理，跨时区自动换算；探测异常时用 `TZ` 环境变量指定（如 `TZ=Asia/Shanghai`）。全天日程按 Outlook 邮箱首选时区写入，机器时区与邮箱时区不同也不会跨天显示；此功能需要 `MailboxSettings.Read` 权限。完整授权共 3 个权限：`Calendars.ReadWrite`（日程读写）、`MailboxSettings.Read`（邮箱时区）、`User.Read`（登录身份），**升级后请重跑一次 `python outlook_setup.py` 重新授权**
-- **确认与脚本交互**：脚本默认会再次询问确认；agent 场景应直接使用 `-y` 跳过（非交互环境中输入不可用时，脚本会自动取消）
-- **输出语言**：默认按系统语言自动选择（中文系统 → 中文，其他 → 英文）；可用 `--lang zh|en` 或环境变量 `OCAL_LANG` 覆盖。提取信息只依赖「输出契约」中的锚点与结构，与语言无关
+- **Recurring events** (weekly sync, 15th of every month...): modify/delete on "one occurrence" affects only that occurrence; changing the rule or deleting the whole series must operate on the **master event**. See `references/recurring-events.md`
+- **Environment**: Windows / Linux / macOS all supported; `python` in the examples may be `python3` on some systems (e.g. macOS) - use the actual interpreter name
+- **Time input**: timed events use `YYYY-MM-DD HH:MM` ("3 pm" = `15:00`); all-day events take a date only; relative times are supported (`today`/`tomorrow`/`this X`/`next X` optionally with a time), resolved by the command against the run-time system clock - **never compute dates yourself** (full conventions in `references/commands.md`). Timezone is handled automatically in the computer's local timezone with cross-timezone conversion; if detection fails, set the `TZ` environment variable (e.g. `TZ=Asia/Shanghai`). All-day events are written in the mailbox's preferred timezone and never span two days even when the machine timezone differs from the mailbox's; this feature needs the `MailboxSettings.Read` permission. The full authorization covers 3 permissions: `Calendars.ReadWrite` (event read/write), `MailboxSettings.Read` (mailbox timezone), `User.Read` (sign-in identity) - **after upgrading, re-run `python outlook_setup.py` once to re-authorize**
+- **Confirmation & scripting**: scripts ask for confirmation by default; in agent scenarios use `-y` to skip (in non-interactive environments where input is unavailable, the script auto-cancels)
+- **Output language**: auto-selected by system language (Chinese system → Chinese, others → English); override with `--lang zh|en` or the `OCAL_LANG` environment variable. Extraction relies only on the anchors and structure in "Output Contract" - language-independent
+- **Auto-install on first run**: missing `requests`/`msal`/`tzdata` are pip-installed automatically on first run. Missing `tzdata` breaks Windows timezone resolution and shifts event times - keep it. On install failure, manual commands are shown; if "dependencies still missing" is reported, restart the terminal
 
-- **首次运行自动安装依赖**：脚本首次运行缺少 `requests`/`msal`/`tzdata` 时会自动 pip 安装。`tzdata` 缺失会导致 Windows 时区解析失败、日程时间偏移，必须保留。安装失败时会给出手动命令；若提示"依赖仍缺失"，需重启终端
+## Output Language
+Determine the language of the user's current conversation (look at the current message and recent conversation):
+- If the user writes in Chinese (中文), respond in Chinese and pass `--lang zh` on every command.
+- Otherwise, respond in English and pass `--lang en`.
+Never ask the user which language they want. The script falls back to the system language; your override based on the conversation wins.
 
-## 输出语言 / Output Language
-判断用户本次对话的语言（看当前消息与最近对话）：
-- 用户用中文 → 用中文回复，所有命令加 `--lang zh`；
-- 否则 → 用英文回复，加 `--lang en`。
-不要反问用户想要哪种语言。脚本默认按系统语言，以你按对话语言得出的结果为准。
+## Detailed Reference
 
-## 详细参考
-
-| 文件 | 什么时候读 |
+| File | When to read |
 |---|---|
-| `references/commands.md` | 需要完整参数列表和更多示例时 |
-| `references/recurring-events.md` | 涉及定期日程（创建/改单次/删系列）时 |
-| `references/configuration.md` | 首次连接日历、换账户、自带 Azure 应用时 |
-| `references/troubleshooting.md` | 出错、报错、结果不对时 |
+| `references/commands_EN.md` | Full parameter list and more examples |
+| `references/recurring-events_EN.md` | Recurring events (create/modify occurrence/delete series) |
+| `references/configuration_EN.md` | First-time connection, switching accounts, bring-your-own Azure app |
+| `references/troubleshooting_EN.md` | Errors, failures, unexpected results |

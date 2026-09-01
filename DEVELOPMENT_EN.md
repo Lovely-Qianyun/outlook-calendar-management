@@ -83,7 +83,7 @@ references/             # User documentation
 - **Natural-language copy is NOT part of the protocol**: the protocol only promises anchors, indentation, colon/parenthesis structure, and slot/JSON formats; in-line copy (e.g. `系列主事件ID` (Series master event ID), `确认?` (Confirm?), `无空闲时段` (no free slots)) follows the language and agents must not depend on specific copy
 - Dates/weekdays use runtime functions like `d_md`/`date_weekday`/`weekday`. The language isn't decided until after module import, so these can't be constants
 - New copy must fill both the zh and en tables; a missing key falls back to Chinese, then to the key name, making missed translations obvious during development
-- Doc naming convention: README.md is the English default landing page and README.zh-CN.md is the Chinese page (the two link to each other at the top); SKILL.md is the single agent manual (Chinese base, bilingual description, with language-detection instructions in the body); English/Chinese docs are maintained in `_EN` / `.zh-CN` pairs.
+- Doc naming convention: README.md is the English default landing page and README.zh-CN.md is the Chinese page (the two link to each other at the top); SKILL.md is the English default agent manual and SKILL.zh-CN.md is the Chinese mirror (frontmatter description in English so marketplaces can read it; the body carries the output-language directive); English/Chinese docs are maintained in `_EN` / `.zh-CN` pairs.
 
 ## Output protocol: the string protocol
 
