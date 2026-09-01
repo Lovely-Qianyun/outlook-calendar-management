@@ -1,158 +1,158 @@
-# 命令参考
+# Command Reference
 
-本文档是 Outlook 日历助手（通过命令行管理 Outlook 日历的工具集）的完整命令参考。
-前置条件：已完成连接认证（见 `configuration.md`）；所有命令形如 `python outlook_cal.py <命令> [参数]`，在项目 `scripts/` 目录下运行。
+This is the full command reference for the Outlook Calendar Assistant - a toolkit that manages your Outlook calendar from the command line.
+Prerequisites: you have completed sign-in and authorization (see `configuration.md`); every command has the form `python outlook_cal.py <command> [args]`, run from the project's `scripts/` directory.
 
-## 目录
+## Table of Contents
 
-- [通用约定](#通用约定)
-- [1. 查看安排](#1-查看安排)（status / list / today / tomorrow / week / read / free / next）
-- [2. 添加日程：add](#2-添加日程add)
-- [3. 修改日程：update](#3-修改日程update)
-- [4. 移动日程：move](#4-移动日程move)
-- [5. 删除日程：delete](#5-删除日程delete)
-- [6. 机器可读输出：--json](#6-机器可读输出json)
+- [General conventions](#general-conventions)
+- [1. Viewing your schedule](#1-viewing-your-schedule) (status / list / today / tomorrow / week / read / free / next)
+- [2. Adding events: add](#2-adding-events-add)
+- [3. Modifying events: update](#3-modifying-events-update)
+- [4. Moving events: move](#4-moving-events-move)
+- [5. Deleting events: delete](#5-deleting-events-delete)
+- [6. Machine-readable output: --json](#6-machine-readable-output---json)
 
-## 通用约定
+## General conventions
 
-- **时间格式**：时段用 `YYYY-MM-DD HH:MM`，如 `2026-08-10 09:00`；全天只用 `YYYY-MM-DD`。**也支持相对时间**：`今天`/`明天`/`后天`/`本周X`/`下周X`（可带时刻：`今天 14:00`、`今天下午2点`、`明天上午9点半`），按命令运行时的系统当前日期换算
-- **事件 ID**：须从命令输出的 🆔 行获取，不能凭空构造；`list` / `add` / `read` 均可获得
-- **--search 定位**：`update` / `delete` / `move` 不传事件 ID 时可用 `--search "词"` 按标题/地点/备注定位（唯一匹配直接操作；多匹配报错并列出候选 🆔；搜索窗口为过去 7 天 ~ 未来 30 天）
-- **确认**：`update` / `delete` / `move` 默认会询问一次确认，`-y` 可跳过；`--json` 时自动跳过
-- **语言**：默认按系统语言自动选择（中文系统 → 中文，其他 → 英文）；`--lang zh|en`（命令前后均可）或环境变量 `OCAL_LANG` 覆盖。`--json` 输出与 emoji 锚点语言无关
-- **首次运行**：自动安装缺失依赖（requests/msal/tzdata）；安装失败时会提示手动安装命令。`tzdata` 是 Windows 时区解析正确的关键，缺失可能导致时间偏移
-- **机器可读**：任意命令加 `--json` → stdout 只输出 JSON（用法见最后一节）
+- **Time formats**: timed events use `YYYY-MM-DD HH:MM`, e.g. `2026-08-10 09:00`; all-day events take a date only. **Relative times are also supported**: `today`/`tomorrow`/`day after tomorrow`/`this X`/`next X` (optionally with a time: `today 14:00`, `tomorrow 9:30 am`; Chinese forms like `今天下午2点` work too), resolved against the system clock at run time
+- **Event ID**: always taken from the 🆔 line in command output - never fabricated; available from `list` / `add` / `read`
+- **--search targeting**: `update` / `delete` / `move` accept `--search "keyword"` instead of an event ID, locating the target by title/location/notes (a unique match operates directly; multiple matches raise an error listing candidate 🆔s; search window: past 7 days ~ next 30 days)
+- **Confirmation**: `update` / `delete` / `move` ask for confirmation by default; `-y` skips it; `--json` mode skips it automatically
+- **Language**: auto-selected by system language (Chinese system → Chinese, otherwise English); override with `--lang zh|en` (before or after the command) or the `OCAL_LANG` environment variable. `--json` output and emoji anchors are language-independent
+- **First run**: missing dependencies (requests/msal/tzdata) are installed automatically; on install failure, manual commands are shown. `tzdata` is essential for correct Windows timezone resolution - without it times may shift
+- **Machine-readable**: append `--json` to any command → stdout carries only JSON (see the last section)
 
 ---
 
-## 1. 查看安排
+## 1. Viewing your schedule
 
-### status — 连接状态
-`status`：显示当前账户、登录有效期。
+### status — connection state
+`status`: shows the current account and login expiry.
 
-### list — 查看一段时间的日程
-默认未来 7 天，按天分组显示（时间、标题、定期标记、类别、🆔）。
+### list — view events in a time range
+Defaults to the next 7 days, grouped by day (time, subject, recurrence mark, category, 🆔).
 
-| 参数 | 作用 |
-|------|------|
-| `--days N` | 查看未来 N 天（默认 7） |
-| `--past N` | 同时查看过去 N 天 |
-| `--from YYYY-MM-DD` | 从指定日期开始查看（此时忽略 `--past`） |
-| `--search "词"` | 按标题/地点/备注筛选 |
-| `--category "类别"` | 按类别筛选 |
-| `--created-after 日期` | 仅查看此后**添加**的日程（"我昨天加的"） |
-| `--reminders` | 仅查看设置了提醒的日程 |
-| `--summary` | 仅显示每天日程数量，不列出明细 |
+| Option | Effect |
+|--------|--------|
+| `--days N` | Look ahead N days (default 7) |
+| `--past N` | Also look back N days |
+| `--from YYYY-MM-DD` | Start from the given date (ignores `--past`) |
+| `--search "term"` | Filter by title/location/notes |
+| `--category "name"` | Filter by category |
+| `--created-after date` | Only events **added** after this date ("what did I add yesterday") |
+| `--reminders` | Only events with reminders set |
+| `--summary` | Only daily counts, no details |
 
 ```bash
-python outlook_cal.py list --days 30 --past 7 --category "工作"
+python outlook_cal.py list --days 30 --past 7 --category "Work"
 python outlook_cal.py list --from "2026-08-20" --days 5 --summary
-python outlook_cal.py list --created-after "2026-08-06" --search "会议"
+python outlook_cal.py list --created-after "2026-08-06" --search "meeting"
 ```
 
-### today / tomorrow / week — 快捷查看
-今天 / 明天 / 未来 7 天。均支持 `--search` / `--category` / `--summary`。
+### today / tomorrow / week — quick views
+Today / tomorrow / next 7 days. All support `--search` / `--category` / `--summary`.
 
-### read — 日程详情
-`read <ID>`：完整信息（时间、地点、类别、重复规则、重要度、私密、备注、链接、添加时间、组织者）。若是定期日程的某一次，还会显示所属系列、第 N 次、系列主事件 ID。
+### read — event details
+`read <ID>`: full information (time, location, category, recurrence rule, importance, privacy, notes, link, created time, organizer). For an occurrence of a recurring series it also shows the series, the Nth occurrence, and the series master event ID.
 
-### free — 空闲时段
-`free [日期] [--from HH:MM] [--to HH:MM] [--days N]`（默认今天 09:00-18:00，1 天）。
-按"忙碌/空闲"状态判断：标记为"空闲"的日程不视为占用；全天日程占用整天。
+### free — free time slots
+`free [date] [--from HH:MM] [--to HH:MM] [--days N]` (default: today 09:00-18:00, 1 day).
+Judged by busy/free status: events marked "free" don't count as occupied; all-day events occupy the whole day.
 
-### next — 定期日程的下次出现
-`next <ID>`：返回未来 365 天内的下一次出现；系列已结束时会有明确提示；非定期日程会报错。
+### next — next occurrence of a recurring event
+`next <ID>`: returns the next occurrence within 365 days; a finished series is clearly indicated; non-recurring events raise an error.
 
 ---
 
-## 2. 添加日程：add
+## 2. Adding events: add
 
-`add <标题> <开始> [结束]` —— 省略结束时间时，默认开始后 1 小时。
+`add <subject> <start> [end]` — omitting the end time defaults to start + 1 hour.
 
-| 参数 | 作用 |
-|------|------|
-| `--all-day` | 全天（开始只给日期） |
-| `-l "地点"` | 地点 |
-| `-b "备注"` | 备注 |
-| `--category "工作,重要"` | 类别（逗号分隔多个） |
-| `--remind N` | 提醒：全天 = 提前 N **天**；时段 = 提前 N **分钟** |
-| `--repeat "规则"` | 定期（语法见 recurring-events.md） |
-| `--repeat-until 日期` / `--repeat-times N` | 定期结束条件（需配合 `--repeat`） |
-| `--importance 低/普通/高` | 重要度 |
-| `--private` | 私密 |
-| `--busy busy/free/tentative/oof/workingElsewhere` | 忙闲显示 |
-| `--force` | 跳过冲突检查 |
+| Option | Effect |
+|--------|--------|
+| `--all-day` | All-day (start takes a date only) |
+| `-l "location"` | Location |
+| `-b "notes"` | Notes |
+| `--category "Work,Important"` | Categories (comma-separated) |
+| `--remind N` | Reminder: all-day = N **days** before; timed = N **minutes** before |
+| `--repeat "rule"` | Recurrence (syntax in recurring-events.md) |
+| `--repeat-until date` / `--repeat-times N` | Recurrence end condition (requires `--repeat`) |
+| `--importance low/normal/high` | Importance |
+| `--private` | Private |
+| `--busy busy/free/tentative/oof/workingElsewhere` | Busy/free display |
+| `--force` | Skip conflict check |
 
-注意：
-- 仅给出日期而未给时间时，自动按全天处理（会提示）
-- 全天日程可给定第二个日期参数表示多天（`add "旅行" "2026-08-10" "2026-08-12" --all-day`）
-- 默认检查与现有日程的重叠情况，仅警告不阻断；`--force` 可跳过
+Notes:
+- A date without a time is treated as all-day (with a hint)
+- All-day events accept a second date for multi-day (e.g. `add "Trip" "2026-08-10" "2026-08-12" --all-day`)
+- Overlaps with existing events are warned about, not blocked; `--force` skips the check
 
 ```bash
-python outlook_cal.py add "周会" "2026-08-10 09:00" "2026-08-10 10:00" -l "3号会议室" -b "讨论Q3" --category "工作" --remind 10
-python outlook_cal.py add "生日" "2026-08-15" --all-day
-python outlook_cal.py add "旅行" "2026-08-10" "2026-08-12" --all-day
-python outlook_cal.py add "站会" "2026-08-14 10:00" "2026-08-14 10:30" --repeat "每周五" --repeat-times 5
+python outlook_cal.py add "Weekly sync" "2026-08-10 09:00" "2026-08-10 10:00" -l "Room 3" -b "Q3 discussion" --category "Work" --remind 10
+python outlook_cal.py add "Birthday" "2026-08-15" --all-day
+python outlook_cal.py add "Trip" "2026-08-10" "2026-08-12" --all-day
+python outlook_cal.py add "Standup" "2026-08-14 10:00" "2026-08-14 10:30" --repeat "every friday" --repeat-times 5
 ```
 
 ---
 
-## 3. 修改日程：update
+## 3. Modifying events: update
 
-`update [<ID>] [参数]` —— 仅修改给定的字段，其余不变；不传 ID 时可用 `--search` 定位目标。
+`update [<ID>] [options]` — only the given fields change, everything else stays; when no ID is given, use `--search` to locate the target.
 
-| 参数 | 作用 |
-|------|------|
-| `--search "词"` | 不传事件 ID 时按关键词定位（唯一匹配直接操作；多匹配报错列出候选） |
-| `--subject "新标题"` | 修改标题（`""` 表示清空） |
-| `--start` / `--end` | 修改时间（全天给日期，时段给 `日期 时间`） |
-| `--all-day` / `--no-all-day` | 全天 ↔ 时段互转 |
-| `-l` / `-b` | 地点 / 备注（`""` 表示清空） |
-| `--category` | 类别（`""` 表示清空） |
-| `--importance` / `--private`/`--no-private` / `--busy` | 重要度 / 私密 / 忙闲 |
-| `--remind N` / `--no-remind` | 设置提醒 / 关闭提醒 |
-| `--repeat "规则"` / `--repeat ""` | 设置定期 / 解除定期（转为单次） |
-| `--repeat-until` / `--repeat-times` | 定期结束条件（需配合 `--repeat`） |
-| `-y` | 跳过确认 |
+| Option | Effect |
+|--------|--------|
+| `--search "term"` | Locate by keyword when no event ID is given (unique match operates directly; multiple matches list candidates) |
+| `--subject "new title"` | Change the title (`""` clears it) |
+| `--start` / `--end` | Change the time (all-day: date; timed: `date time`) |
+| `--all-day` / `--no-all-day` | Convert between all-day ↔ timed |
+| `-l` / `-b` | Location / notes (`""` clears) |
+| `--category` | Category (`""` clears) |
+| `--importance` / `--private`/`--no-private` / `--busy` | Importance / privacy / busy state |
+| `--remind N` / `--no-remind` | Set reminder / turn off reminder |
+| `--repeat "rule"` / `--repeat ""` | Set recurrence / remove recurrence (back to single) |
+| `--repeat-until` / `--repeat-times` | Recurrence end condition (requires `--repeat`) |
+| `-y` | Skip confirmation |
 
-注意：
-- 转为时段未给 `--end` 时，默认开始后 1 小时
-- 全天日程同时给定 `--start` 与 `--end` 两个日期，可改为多天区间
-- 对定期日程"某一次"的修改仅影响该次；修改整个系列的规则须操作主事件（见 recurring-events.md）
+Notes:
+- Converting to timed without `--end` defaults to start + 1 hour
+- All-day events can become multi-day by giving both `--start` and `--end` dates
+- Modifying "one occurrence" of a recurring event affects only that occurrence; changing the whole series rule requires the master event (see recurring-events.md)
 
 ---
 
-## 4. 移动日程：move
+## 4. Moving events: move
 
-`move [<ID>] --days N` 或 `move [<ID>] --to YYYY-MM-DD`（二选一）；不传 ID 时可用 `--search` 定位目标。
+`move [<ID>] --days N` or `move [<ID>] --to YYYY-MM-DD` (exactly one); when no ID is given, use `--search` to locate the target.
 
-- **保留原来的时间段和时长**，只改日期（全天日程同理）
-- `--days` 可为负数（向前移动）
+- **Keeps the original time slot and duration**, only the date changes (same for all-day events)
+- `--days` may be negative (move backward)
 
 ```bash
-python outlook_cal.py move <ID> --days 3          # 整体往后 3 天
-python outlook_cal.py move <ID> --to "2026-08-20" # 挪到 8 月 20 日
-python outlook_cal.py move --search "站会" --to "2026-08-20"  # 按标题定位后移动
+python outlook_cal.py move <ID> --days 3          # shift 3 days later
+python outlook_cal.py move <ID> --to "2026-08-20" # move to Aug 20
+python outlook_cal.py move --search "standup" --to "2026-08-20"  # locate by keyword, then move
 ```
 
 ---
 
-## 5. 删除日程：delete
+## 5. Deleting events: delete
 
-`delete [<ID>] [-y] [--series]`；不传 ID 时可用 `--search` 定位目标。
+`delete [<ID>] [-y] [--series]`; when no ID is given, use `--search` to locate the target.
 
-| 参数 | 作用 |
-|------|------|
-| （无） | 默认先确认；若目标为定期日程的某一次，会询问"仅删本次 [1] / 删整个系列 [2]" |
-| `--search "词"` | 不传事件 ID 时按关键词定位（唯一匹配直接操作；多匹配报错列出候选） |
-| `-y` | 跳过确认；定期日程默认**只删本次** |
-| `--series` | 删除整个定期系列 |
+| Option | Effect |
+|--------|--------|
+| (none) | Confirms first; for an occurrence of a recurring event, asks "delete this occurrence only [1] / the whole series [2]" |
+| `--search "term"` | Locate by keyword when no event ID is given (unique match operates directly; multiple matches list candidates) |
+| `-y` | Skip confirmation; recurring events default to **this occurrence only** |
+| `--series` | Delete the whole recurring series |
 
 ---
 
-## 6. 机器可读输出：--json
+## 6. Machine-readable output: --json
 
-任意命令前或后加 `--json`：
-- stdout 只有 JSON，人类提示走 stderr
-- list → 日程数组；add/read/update → 日程对象；delete → `{"deleted", "subject", "series"}`；free → 按天结构；出错 → `{"error", "exit": 1}`
-- update/delete/move 的确认流程自动跳过
+Append `--json` before or after any command:
+- stdout carries only JSON; human-oriented messages go to stderr
+- list → array of events; add/read/update → event object; delete → `{"deleted", "subject", "series"}`; free → per-day structure; errors → `{"error", "exit": 1}`
+- update/delete/move confirmations are skipped automatically

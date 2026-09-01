@@ -1,50 +1,50 @@
-# 定期日程
+# Recurring Events
 
-定期日程（recurring event）指会按规则自动重复的日程，如"每周一 9 点的周会"——创建一次，按规则自动延续。
-本文档说明如何修改/删除定期日程的**某一次出现**或**整个系列**，两者的操作对象不同，务必区分。
+A recurring event is an event that repeats automatically on a rule, e.g. "a weekly sync every Monday at 9:00" - create it once and it keeps recurring.
+This document explains how to modify/delete one **occurrence** of a recurring event versus the whole **series** - the two target different objects and must not be confused.
 
-## 核心概念：单次出现与整个系列
+## Core concept: one occurrence vs. the whole series
 
-一个定期日程由三部分组成：
+A recurring event consists of three parts:
 
-| 概念 | 是什么 | 你什么时候会看到它 |
-|------|--------|--------------------|
-| **主事件** | 整个系列（含规则） | `read` 时输出 🆕 系列主事件ID；`list` 不直接显示 |
-| **某一次**（occurrence） | 系列中的一次实例 | `list` 里每行一个，标记 🔁(系列) |
-| **单独改过的那次**（例外） | 被单独修改/取消的一次 | `list` 标记 🔁(已修改) / 🔁(已取消) |
+| Concept | What it is | Where you see it |
+|---------|------------|------------------|
+| **Master event** | The whole series (including the rule) | `read` shows the 🆕 series master event ID line; `list` doesn't show it directly |
+| **One occurrence** | A single instance of the series | One line per item in `list`, marked 🔁(series) |
+| **An individually modified occurrence** (exception) | One occurrence modified/cancelled on its own | `list` marks 🔁(modified) / 🔁(cancelled) |
 
-**核心规则**：对"某一次"执行的修改/删除/移动仅影响该次；修改规则、删除整个系列必须操作**主事件**（`read` 输出中的 🆕 系列主事件ID）。
+**Core rule**: modify/delete/move on "one occurrence" affects only that occurrence; changing the rule or deleting the whole series must operate on the **master event** (the 🆕 series master event ID in `read` output).
 
-## 支持的规则写法（`--repeat "..."`）
+## Supported rule syntax (`--repeat "..."`)
 
-| 你想要 | 写法 |
-|--------|------|
-| 每天 | `每天`（或 `每2天`、`每N天`） |
-| 每周某天 | `每周五`（或 `每2周周三`；只写 `每周` 默认从开始那天算） |
-| 每个工作日 | `工作日`（周一至周五） |
-| 每月某日 | `每月15日` |
-| 每月第 N 个周几 | `每月第一个周三` / `每月最后一个周五` |
-| 每年某月某日 | `每年9月21日` |
+| What you want | Write |
+|---------------|-------|
+| Every day | `every day` (or `every 2 days`, `every N days`) |
+| Weekly on a weekday | `every friday` (or `every 2 weeks wednesday`; bare `weekly` starts from the start date) |
+| Every weekday | `weekdays` (Monday to Friday) |
+| Monthly on a day | `monthly on day 15` |
+| Monthly on the Nth weekday | `monthly on the first wednesday` / `monthly on the last friday` |
+| Yearly on a date | `yearly on 9/21` |
 
-结束条件（配合 `--repeat`）：
-- `--repeat-until 2026-12-31`：到该日期为止
-- `--repeat-times 5`：共计 5 次
+Chinese syntax is also accepted (`每天`/`每周五`/`每月15日` etc.). End conditions (with `--repeat`):
+- `--repeat-until 2026-12-31`: until this date
+- `--repeat-times 5`: 5 occurrences in total
 
-## 常见操作
+## Common operations
 
-| 想做什么 | 怎么做 |
-|---------|--------|
-| 改某一次的时间（只改这次） | `update <那次ID> --start ... --end ...`（会创建"例外"，其余不变） |
-| 删某一次（只删这次） | `delete <那次ID>` → 选 [1] 仅删本次 |
-| 改整个系列的规则 | `read` 拿 🆕 系列主事件ID → `update <主ID> --repeat "新规则"` |
-| 解除定期（变单次） | `update <主ID> --repeat ""` |
-| 删整个系列 | `delete <主ID>`（有警告）或 `delete <那次ID> --series` |
-| 下次什么时候 | `next <那次ID或主ID>` |
-| 把整个系列挪几天 | `move <主ID> --days N`（有警告） |
+| What you want | How |
+|---------------|-----|
+| Change one occurrence's time (this occurrence only) | `update <occurrenceID> --start ... --end ...` (creates an "exception"; the rest stays) |
+| Delete one occurrence (this occurrence only) | `delete <occurrenceID>` → choose [1] this occurrence only |
+| Change the whole series rule | `read` to get the 🆕 series master event ID → `update <masterID> --repeat "new rule"` |
+| Remove recurrence (back to single) | `update <masterID> --repeat ""` |
+| Delete the whole series | `delete <masterID>` (warns) or `delete <occurrenceID> --series` |
+| Next occurrence | `next <occurrenceID or masterID>` |
+| Shift the whole series by days | `move <masterID> --days N` (warns) |
 
-## 需要注意
+## Things to watch out for
 
-- **修改整个系列的规则会重置**此前单独修改/删除过的出现（有警告，操作前先提醒用户）
-- 将某一次调整至**跨越相邻出现**的时间将被拒绝（"相邻出现冲突"）——调整后的时间不得早于前一次出现、也不得晚于后一次出现
-- 已删除的某一次**不可再访问**（提示"不存在"），重新执行 `list` 确认即可
-- 无法表达的规则会**友好报错**，不会静默创建错误规则：如 `每3小时`、`每N个工作日`（此类规则不支持）
+- **Changing the whole series rule resets** occurrences that were individually modified/deleted before (a warning is shown; warn the user first)
+- Moving one occurrence to a time that **overlaps an adjacent occurrence** is rejected ("adjacent occurrence conflict") - the new time must be no earlier than the previous occurrence and no later than the next one
+- A deleted occurrence **cannot be accessed again** (reports "does not exist"); re-run `list` to confirm
+- Rules the parser can't express produce a **friendly error** instead of silently creating a wrong rule: e.g. `every 3 hours`, `every N weekdays` (unsupported)

@@ -1,48 +1,48 @@
-# 故障排除
+# Troubleshooting
 
-本文档用于命令出错（❌ 提示或异常结果）时的排查。排查前请确认已按 `configuration.md` 完成连接认证；各命令的用法见 `commands.md`。
+This document is for diagnosing command errors (❌ messages or unexpected results). Before troubleshooting, make sure you have completed sign-in and authorization per `configuration.md`; command usage is in `commands.md`.
 
-## 连接 / 认证问题
+## Connection / authentication issues
 
-| 现象                     | 解决办法                                                                      |
-| ------------------------ | ----------------------------------------------------------------------------- |
-| 设备码报"找不到应用"     | 注册应用时账户类型选"个人 Microsoft 帐户"并开启"公共客户端流"（仅自带应用场景） |
-| 登录过期 / invalid_grant | 重新运行 `python outlook_setup.py`                                            |
-| 403 权限错误             | 确认应用已授权 `Calendars.ReadWrite` 权限                                     |
-| 时间显示错误（偏差数小时） | Windows 需执行 `pip install tzdata`；安装后重新运行命令；仍未解决时可显式设置 `TZ` 环境变量（如 `TZ=Asia/Shanghai`），其优先级高于系统探测 |
-| 全天日程在 Outlook 里跨两天显示 | 机器时区与 Outlook 账户时区不一致：重跑 `python outlook_setup.py` 授权 `MailboxSettings.Read`，之后全天日程按邮箱时区写入（`status` 会提示两者不同） |
+| Symptom | Solution |
+| ------- | -------- |
+| Device code reports "app not found" | When registering the app, choose account type "Personal Microsoft accounts" and enable "Allow public client flows" (only for bring-your-own-app scenarios) |
+| Login expired / invalid_grant | Re-run `python outlook_setup.py` |
+| 403 permission error | Confirm the app has the `Calendars.ReadWrite` permission |
+| Times are wrong (off by hours) | On Windows run `pip install tzdata`; after installing, re-run the command; if it persists, set the `TZ` environment variable explicitly (e.g. `TZ=Asia/Shanghai`) - it takes priority over system detection |
+| All-day events span two days in Outlook | The machine timezone differs from the Outlook account's: re-run `python outlook_setup.py` to grant `MailboxSettings.Read`; afterwards all-day events are written in the mailbox timezone (`status` hints when the two differ) |
 
-## 日程操作问题
+## Event operation issues
 
-| 现象                               | 解决办法                                                    |
-| ---------------------------------- | ----------------------------------------------------------- |
-| 定期日程删了某次后仍报"不存在"     | 已删除的某次不可再访问，重新 `list` 确认现状                |
-| 改某次时间报"相邻出现冲突"         | 调整为不早于前一次、不晚于后一次出现的时间                  |
-| 改系列规则后之前改过的单次变回去了 | 属于正常行为（修改规则会重置例外）；修改前脚本会有警告      |
-| 加日程没提示冲突                   | 使用了 `--force` 会跳过冲突检查                             |
-| 日程多了找不到                     | `list` 自动翻页，不会遗漏；可用 `--search` 按标题/地点/备注查找 |
+| Symptom | Solution |
+| ------- | -------- |
+| "Does not exist" after deleting an occurrence of a recurring event | A deleted occurrence can't be accessed again; re-run `list` to confirm the current state |
+| "Adjacent occurrence conflict" when changing an occurrence's time | Adjust to a time no earlier than the previous occurrence and no later than the next one |
+| Individually modified occurrences reverted after changing the series rule | This is normal (changing the rule resets exceptions); the script warns before the change |
+| No conflict warning when adding | Using `--force` skips the conflict check |
+| Can't find events that exist | `list` paginates automatically and doesn't miss events; use `--search` to filter by title/location/notes |
 
-## 输入报错（均为友好提示 ❌）
+## Input errors (all friendly ❌ messages)
 
-| 你输入了什么                                     | 提示                                       |
-| ------------------------------------------------ | ------------------------------------------ |
-| 时间格式不对（`2026/08/10`、`24:00`、`2月30日`） | 时间格式错误                               |
-| 结束时间早于/等于开始                            | 结束时间必须晚于开始时间                   |
-| 提醒为负数 / 全天提醒超过 1826 天                | 提醒时间不能为负数 / 全天提醒最多支持 N 天 |
-| 定期规则看不懂（如 `每3小时`）                   | 无法理解重复规则 + 支持的写法列表          |
-| `--repeat-times 0` / 截止早于开始                | 重复次数必须 ≥ 1 / 截止日期早于开始日期    |
-| 截止/次数没配 `--repeat`                         | 重复截止/次数需要配合 --repeat 使用        |
-| 事件 ID 为空 / 不存在                            | 事件ID不能为空 / 该日程不存在或已被删除    |
-| `move` 同时给 `--days` 和 `--to` / 移动 0 天     | 明确提示二选一 / 移动天数不能为 0          |
+| What you typed | Message |
+| -------------- | ------- |
+| Wrong time format (`2026/08/10`, `24:00`, `Feb 30`) | Time format error |
+| End time earlier than/equal to start | End time must be later than start time |
+| Negative reminder / all-day reminder over 1826 days | Reminder can't be negative / all-day reminder supports at most N days |
+| Unparseable recurrence rule (e.g. `every 3 hours`) | Can't understand the recurrence rule + list of supported syntax |
+| `--repeat-times 0` / end date before start | Repeat count must be ≥ 1 / end date is earlier than start date |
+| `--repeat-until`/`--repeat-times` without `--repeat` | Repeat end/count requires --repeat |
+| Empty / nonexistent event ID | Event ID required / this event doesn't exist or was deleted |
+| `move` with both `--days` and `--to` / moving 0 days | Clearly asks for exactly one / days can't be 0 |
 
-| 夏令时切换日提示"本地时间不存在" | 正常提示：切换日有些墙钟时间（如美东 3 月的 02:30）不存在，服务端可能按跳变后时间调整，请改用存在的时间 |
+| DST transition day reports "local time doesn't exist" | Normal hint: some wall-clock times (e.g. 02:30 on US Eastern in March) don't exist on transition days; the server may adjust to the post-transition time - use a time that exists |
 
-## 遇到 traceback 怎么办
+## When you hit a traceback
 
-正常情况下错误均以 ❌ 开头；若出现 traceback，则属于异常情况——请将脚本路径与报错内容反馈给维护者。
+Normally all errors start with ❌; if a traceback appears, that's an anomaly - report the script path and the error content to the maintainers.
 
-## 已知不支持的功能
+## Known unsupported features
 
-- 每 N 小时 / 每 N 个工作日的定期规则
-- 导入 .ics 文件
-- 多日历、多账户切换（规划中）
+- Recurrence rules for every N hours / every N weekdays
+- Importing .ics files
+- Multiple calendars / multiple accounts (planned)

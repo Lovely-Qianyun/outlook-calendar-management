@@ -92,7 +92,7 @@ Never ask the user which language they want. The script falls back to the system
 
 | File | When to read |
 |---|---|
-| `references/commands_EN.md` | Full parameter list and more examples |
-| `references/recurring-events_EN.md` | Recurring events (create/modify occurrence/delete series) |
-| `references/configuration_EN.md` | First-time connection, switching accounts, bring-your-own Azure app |
-| `references/troubleshooting_EN.md` | Errors, failures, unexpected results |
+| `references/commands.md` | Full parameter list and more examples |
+| `references/recurring-events.md` | Recurring events (create/modify occurrence/delete series) |
+| `references/configuration.md` | First-time connection, switching accounts, bring-your-own Azure app |
+| `references/troubleshooting.md` | Errors, failures, unexpected results |

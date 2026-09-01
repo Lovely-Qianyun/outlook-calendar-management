@@ -63,4 +63,4 @@ $ python scripts/outlook_cal.py delete <ID> -y
 
 ## 开发
 
-如需参与开发，请先阅读 [DEVELOPMENT.md](DEVELOPMENT.md)——其中包含完整的输出协议、关键设计决策、多语言（i18n）约定和 Graph API 官方文档链接。
+如需参与开发，请先阅读 [DEVELOPMENT.zh-CN.md](DEVELOPMENT.zh-CN.md)——其中包含完整的输出协议、关键设计决策、多语言（i18n）约定和 Graph API 官方文档链接。

@@ -1,36 +1,36 @@
-# 自带 Azure 应用注册指南
+# Bring-Your-Own Azure App Registration Guide
 
-> 仅当不使用**内置默认应用**、想注册自己的 Azure 应用时阅读本节；其余情况可跳过。
+> Read this only if you do NOT use the **built-in default app** and want to register your own Azure app; otherwise skip it.
 >
-> 背景：本工具的登录采用"设备码流程"——终端显示一个验证码，在浏览器中打开 microsoft.com/link 输入后完成授权。默认应用已内置该流程的全部配置；自带应用只需注册并提供一个 Client ID。
+> Background: this toolkit signs in via the "device-code flow" - the terminal shows a verification code, and you open microsoft.com/link in a browser and enter it to authorize. The default app already contains all configuration for this flow; a bring-your-own app only needs to be registered and provide one Client ID.
 
-## 为什么需要 Client ID
+## Why you need a Client ID
 
-- **Client ID（应用程序 ID）**：应用在微软身份体系中的唯一标识。设备码登录仅需要此项。
-- **不需要 Tenant ID / Client Secret**：这两者仅用于"服务器后台无人值守"场景（机密客户端）。本工具采用公共客户端 + 设备码流程，任何要求填写这两项的界面均可忽略。
+- **Client ID (application ID)**: the unique identifier of your app in Microsoft's identity system. Device-code sign-in only needs this.
+- **No Tenant ID / Client Secret needed**: those two are for "server-side, no-human-interaction" scenarios (confidential clients). This toolkit is a public client using the device-code flow - any screen asking for them can be ignored.
 
-## 注册步骤
+## Registration steps
 
-1. 打开 https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade
-2. 使用 Outlook 账户登录
-3. **新建注册** → 填写应用名称 → 账户类型选择 **"仅个人 Microsoft 帐户"**
-4. **身份验证** → 添加平台 → **"移动和桌面应用程序"** → 勾选 `https://login.microsoftonline.com/common/oauth2/nativeclient`
-5. 身份验证页底部 → **"允许公共客户端流"** → 设为 **"是"** → 保存
-6. **API 权限** → 添加权限 → Microsoft Graph → 委托权限 → 依次添加三个权限：`User.Read`、`Calendars.ReadWrite`、`MailboxSettings.Read`（各自的用途见 `configuration.md` 的连接步骤表）
-7. 回到 **概览** 页，复制顶部 **"应用程序(客户端) ID"**
+1. Open https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade
+2. Sign in with your Outlook account
+3. **New registration** → enter an app name → account type: **"Personal Microsoft accounts only"**
+4. **Authentication** → Add a platform → **"Mobile and desktop applications"** → check `https://login.microsoftonline.com/common/oauth2/nativeclient`
+5. Bottom of the Authentication page → **"Allow public client flows"** → set to **"Yes"** → Save
+6. **API permissions** → Add a permission → Microsoft Graph → Delegated permissions → add all three in turn: `User.Read`, `Calendars.ReadWrite`, `MailboxSettings.Read` (their purposes are listed in the connection-steps table of `configuration.md`)
+7. Back on the **Overview** page, copy the **"Application (client) ID"** at the top
 
-## 认证
+## Authentication
 
 ```bash
-python outlook_setup.py <你的Client ID>
+python outlook_setup.py <your Client ID>
 ```
 
-之后的流程与默认应用完全一致：脚本打印验证码 → 浏览器打开 `https://www.microsoft.com/link` 输入 → Outlook 账户授权。token 自动续期。
+The rest of the flow is identical to the default app: the script prints a code → open `https://www.microsoft.com/link` in a browser and enter it → authorize with your Outlook account. The token renews automatically.
 
-## 常见失败
+## Common failures
 
-| 症状 | 原因与解决 |
-|------|-----------|
-| 设备码报"找不到应用" | 账户类型未选择"个人 Microsoft 帐户"，或"允许公共客户端流"未开启 |
-| 403 Forbidden | `Calendars.ReadWrite` 委托权限未添加 |
-| 验证码过期 | 重新运行 `python outlook_setup.py` 再试一次 |
+| Symptom | Cause & fix |
+|---------|-------------|
+| Device code reports "app not found" | Account type isn't "Personal Microsoft accounts", or "Allow public client flows" isn't enabled |
+| 403 Forbidden | The `Calendars.ReadWrite` delegated permission wasn't added |
+| Verification code expired | Re-run `python outlook_setup.py` and try again |

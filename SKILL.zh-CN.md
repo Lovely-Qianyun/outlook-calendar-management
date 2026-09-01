@@ -38,7 +38,7 @@ metadata:
 3. **修改前先查看现状**：先执行 `read` 获取当前内容，再决定修改内容
 4. **事件 ID 仅从输出获取**：命令输出中的 🆔 行即事件 ID，严禁猜测或编造
 5. **操作后回读验证再汇报**：add/update/move/delete 执行后，用 `read`/`list` 回读一次核对实际结果（标题+时间），确认与意图一致后再向用户汇报；不能只凭命令返回值就断言"已完成"
-6. **失败不盲目重试**：命令非零退出时，先读 ❌ 行（`--json` 时读 error 字段），按提示处理——权限/登录问题 → 重跑 `python outlook_setup.py`；查不到 → 扩大时间范围或换搜索词；严禁原样重试同一命令。仍无法解决时对照 `references/troubleshooting.md` 处理，或如实上报用户
+6. **失败不盲目重试**：命令非零退出时，先读 ❌ 行（`--json` 时读 error 字段），按提示处理——权限/登录问题 → 重跑 `python outlook_setup.py`；查不到 → 扩大时间范围或换搜索词；严禁原样重试同一命令。仍无法解决时对照 `references/troubleshooting.zh-CN.md` 处理，或如实上报用户
 
 ## 输出契约
 
@@ -71,13 +71,13 @@ metadata:
 → ① `list --search "会议"` 无结果时，先确认搜索词与时间范围（默认只查未来 7 天）→ ② 用 `list --days 14` 或 `--past` 扩大范围 → ③ 仍无则如实告诉用户"没找到"并给出建议，**不编造日程**。
 
 ### "日历连不上了 / 权限报错"
-→ ① 跑 `status` 确认连接与登录状态 → ② 提示 invalid_grant/401/403 时按 `references/troubleshooting.md` 处理（通常重跑 `python outlook_setup.py` 重新授权）→ ③ 网络问题可稍后重试一次，仍失败如实上报。
+→ ① 跑 `status` 确认连接与登录状态 → ② 提示 invalid_grant/401/403 时按 `references/troubleshooting.zh-CN.md` 处理（通常重跑 `python outlook_setup.py` 重新授权）→ ③ 网络问题可稍后重试一次，仍失败如实上报。
 
 ## 关键概念
 
-- **定期日程**（每周例会、每月 15 日……）：对"某一次"执行的修改/删除仅影响该次；修改规则、删除整个系列须操作**主事件**。详见 `references/recurring-events.md`
+- **定期日程**（每周例会、每月 15 日……）：对"某一次"执行的修改/删除仅影响该次；修改规则、删除整个系列须操作**主事件**。详见 `references/recurring-events.zh-CN.md`
 - **运行环境**：Windows / Linux / macOS 均可；命令示例中的 `python` 在部分系统（如 macOS）为 `python3`，按实际解释器名运行即可
-- **时间输入**：时段用 `YYYY-MM-DD HH:MM`（"下午3点" = `15:00`），全天只给日期；支持相对时间（`今天`/`明天`/`本周X`/`下周X` 及英文 `today`/`this friday` 等，可带时刻），由命令按运行时刻系统时钟解析——**不要自己推算日期**（完整约定见 `references/commands.md`）。时区自动按电脑本地时区处理，跨时区自动换算；探测异常时用 `TZ` 环境变量指定（如 `TZ=Asia/Shanghai`）。全天日程按 Outlook 邮箱首选时区写入，机器时区与邮箱时区不同也不会跨天显示；此功能需要 `MailboxSettings.Read` 权限。完整授权共 3 个权限：`Calendars.ReadWrite`（日程读写）、`MailboxSettings.Read`（邮箱时区）、`User.Read`（登录身份），**升级后请重跑一次 `python outlook_setup.py` 重新授权**
+- **时间输入**：时段用 `YYYY-MM-DD HH:MM`（"下午3点" = `15:00`），全天只给日期；支持相对时间（`今天`/`明天`/`本周X`/`下周X` 及英文 `today`/`this friday` 等，可带时刻），由命令按运行时刻系统时钟解析——**不要自己推算日期**（完整约定见 `references/commands.zh-CN.md`）。时区自动按电脑本地时区处理，跨时区自动换算；探测异常时用 `TZ` 环境变量指定（如 `TZ=Asia/Shanghai`）。全天日程按 Outlook 邮箱首选时区写入，机器时区与邮箱时区不同也不会跨天显示；此功能需要 `MailboxSettings.Read` 权限。完整授权共 3 个权限：`Calendars.ReadWrite`（日程读写）、`MailboxSettings.Read`（邮箱时区）、`User.Read`（登录身份），**升级后请重跑一次 `python outlook_setup.py` 重新授权**
 - **确认与脚本交互**：脚本默认会再次询问确认；agent 场景应直接使用 `-y` 跳过（非交互环境中输入不可用时，脚本会自动取消）
 - **输出语言**：默认按系统语言自动选择（中文系统 → 中文，其他 → 英文）；可用 `--lang zh|en` 或环境变量 `OCAL_LANG` 覆盖。提取信息只依赖「输出契约」中的锚点与结构，与语言无关
 
@@ -93,7 +93,7 @@ metadata:
 
 | 文件 | 什么时候读 |
 |---|---|
-| `references/commands.md` | 需要完整参数列表和更多示例时 |
-| `references/recurring-events.md` | 涉及定期日程（创建/改单次/删系列）时 |
-| `references/configuration.md` | 首次连接日历、换账户、自带 Azure 应用时 |
-| `references/troubleshooting.md` | 出错、报错、结果不对时 |
+| `references/commands.zh-CN.md` | 需要完整参数列表和更多示例时 |
+| `references/recurring-events.zh-CN.md` | 涉及定期日程（创建/改单次/删系列）时 |
+| `references/configuration.zh-CN.md` | 首次连接日历、换账户、自带 Azure 应用时 |
+| `references/troubleshooting.zh-CN.md` | 出错、报错、结果不对时 |

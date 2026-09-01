@@ -1,6 +1,6 @@
 # Skill 级评估集
 
-评估 agent 加载本 skill 后的**实际操作质量**，而非仅验证触发与否（触发验证见 `trigger-eval.md`，输出协议验证见 `protocol-eval.md`）。
+评估 agent 加载本 skill 后的**实际操作质量**，而非仅验证触发与否（触发验证见 `trigger-eval.zh-CN.md`，输出协议验证见 `protocol-eval.zh-CN.md`）。
 
 依据 Anthropic / OpenAI 的 skill 设计推荐：触发成功 ≠ 按预期操作，需在全新会话中做 with/without 基线对比。
 
@@ -29,4 +29,4 @@
 
 ## 改动对照
 
-修改 SKILL.md（铁律、常见任务、输出契约）后重跑本评估集；协议层改动（输出格式）跑 `protocol-eval.md`；触发描述改动跑 `trigger-eval.md`。
+修改 SKILL.md（铁律、常见任务、输出契约）后重跑本评估集；协议层改动（输出格式）跑 `protocol-eval.zh-CN.md`；触发描述改动跑 `trigger-eval.zh-CN.md`。

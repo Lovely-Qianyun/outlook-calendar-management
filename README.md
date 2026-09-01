@@ -63,4 +63,4 @@ The overall design idea is simple: **output is always predictable and verifiable
 
 ## Development
 
-For development, start with [DEVELOPMENT_EN.md](DEVELOPMENT_EN.md) — it covers the full output protocol, key design decisions, i18n conventions, and testing.
+For development, start with [DEVELOPMENT.md](DEVELOPMENT.md) — it covers the full output protocol, key design decisions, i18n conventions, and testing.
