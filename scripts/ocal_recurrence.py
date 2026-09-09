@@ -1,125 +1,98 @@
-"""ocal_recurrence — 定期规则：自然语言解析、人类可读格式化、出现次数估算、参数构造。"""
+"""ocal_recurrence — 结构化定期规则校验、格式化、出现次数估算与参数构造。"""
+import json
 from datetime import datetime, timedelta
 
 from ocal_errors import CalError
 from ocal_i18n import t, get_lang, idx_name, weekday_names
-from ocal_time import LOCAL_TZ_NAME
+from ocal_time import LOCAL_TZ_NAME, _parse_dt_arg
 
 # 注意：Python weekday() 0=周一 ... 6=周日，这两个数组必须从周一对齐
 EN_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-CN_DAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-WEEK_INDEX = {"first": "第一", "second": "第二", "third": "第三", "fourth": "第四", "last": "最后"}
+WEEK_INDEX = ("first", "second", "third", "fourth", "last")
+_INT32_MAX = 2_147_483_647
+_PATTERN_FIELDS = {
+    "daily": {"type", "interval"},
+    "weekly": {"type", "interval", "daysOfWeek", "firstDayOfWeek"},
+    "absoluteMonthly": {"type", "interval", "dayOfMonth"},
+    "relativeMonthly": {"type", "interval", "daysOfWeek", "index"},
+    "absoluteYearly": {"type", "interval", "month", "dayOfMonth"},
+    "relativeYearly": {"type", "interval", "month", "daysOfWeek", "index"},
+}
 
-# 英文星期解析别名（"every friday" 用）
-_EN_WEEKDAY_RE = "|".join(EN_DAYS)
+
+def _pattern_error(detail):
+    raise CalError(t("err_repeat_field", detail=detail))
 
 
-def _parse_recurrence(desc, start_date):
-    """把自然语言重复描述解析成 Graph 的 recurrence 对象。
+def _unique_object(pairs):
+    """JSON duplicate keys are errors, never silently last-value-wins."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            _pattern_error(f"duplicate field: {key}")
+        result[key] = value
+    return result
 
-    中文支持：每天 / 每N天 / 每周X / 每N周X / 工作日 / 每月N日 / 每月第N个周X / 每年X月X日
-    英文支持：daily / every day / every N days / weekdays / every weekday / every friday / weekly / monthly on day N / yearly on M/D
 
-    :param desc: 用户给的重复规则描述
-    :param start_date: 开始日期（"每周"没给星期时用它推断默认星期）
-    :return: (recurrence dict, 人类可读描述)；不认识的规则返回 (None, None)
+def _pattern_int(pattern, name, minimum, maximum):
+    value = pattern[name]
+    if type(value) is not int or not minimum <= value <= maximum:
+        _pattern_error(f"{name} must be an integer from {minimum} to {maximum}")
+
+
+def _parse_recurrence(raw, start_date):
+    """Validate an explicit Graph recurrencePattern JSON object.
+
+    All fields applicable to the selected type are mandatory, including weekly
+    firstDayOfWeek and relative index. No language interpretation or inferred
+    weekdays/default interval happens here. Invalid input raises CalError.
     """
-    import re as _re
-    s = desc.strip().lower()
-    pattern = {}
-    if s in ("每天", "每日", "daily", "every day"):
-        pattern = {"type": "daily", "interval": 1}
-        desc_cn = t("rec_daily")
-    elif s in ("工作日", "每个工作日", "每周工作日", "工作日每天", "every weekday", "every workday", "mon-fri", "weekdays"):
-        # 周一至周五：必须在 weekly 分支之前判断，否则"每周工作日"会被 weekly 误吞
-        pattern = {"type": "weekly", "interval": 1,
-                   "daysOfWeek": ["monday", "tuesday", "wednesday", "thursday", "friday"]}
-        desc_cn = t("rec_weekdays")
-    elif _re.match(r"^每(\d+)天$", s):
-        interval = int(_re.match(r"^每(\d+)天$", s).group(1))
-        if interval < 1:
-            return None, None  # 每0天没有意义，别等 Graph 拒绝
-        pattern = {"type": "daily", "interval": interval}
-        desc_cn = t("rec_every_n_days", n=pattern['interval'])
-    elif _re.match(r"^every (\d+) days$", s):
-        interval = int(_re.match(r"^every (\d+) days$", s).group(1))
-        if interval < 1:
-            return None, None
-        pattern = {"type": "daily", "interval": interval}
-        desc_cn = t("rec_every_n_days", n=pattern['interval'])
-    elif s in ("每周", "每周一", "weekly") or _re.match(r"^每\d*周", s):
-        m = _re.match(r"^每(\d*)周(.*)$", s)
-        interval = int(m.group(1)) if m and m.group(1) else 1
-        if interval < 1:
-            return None, None  # 每0周同理
-        rest = m.group(2) if m else s.replace("每周", "").replace("weekly", "")
-        days = []
-        if not rest:
-            # 没写星期：从 start_date 推断
-            days = [EN_DAYS[start_date.weekday()]]
-            desc_cn = (t("rec_weekly") if interval == 1 else t("rec_every_n_weeks", n=interval)) \
-                + weekday_names()[start_date.weekday()]
-        else:
-            for i, cn in enumerate(CN_DAYS):
-                if cn.replace("周", "") in rest or cn in rest:
-                    days.append(EN_DAYS[i])
-            if not days:
-                return None, None
-            day_strs = t("rec_day_join").join(weekday_names()[i] for i, d in enumerate(EN_DAYS) if d in days)
-            desc_cn = (t("rec_weekly") if interval == 1 else t("rec_every_n_weeks", n=interval)) + day_strs
-        pattern = {"type": "weekly", "interval": interval, "daysOfWeek": days}
-    elif _re.match(rf"^every ({_EN_WEEKDAY_RE})$", s):
-        # 英文单日：every friday
-        day = _re.match(rf"^every ({_EN_WEEKDAY_RE})$", s).group(1)
-        pattern = {"type": "weekly", "interval": 1, "daysOfWeek": [day]}
-        desc_cn = t("rec_weekly") + weekday_names()[EN_DAYS.index(day)]
-    elif _re.match(r"^每月(\d+)日", s):
-        m = _re.match(r"^每月(\d+)日", s)
-        day = int(m.group(1))
-        if not 1 <= day <= 31:
-            return None, None
-        pattern = {"type": "absoluteMonthly", "interval": 1, "dayOfMonth": day}
-        desc_cn = t("rec_monthly_day", day=day)
-    elif _re.match(r"^monthly on day (\d+)$", s):
-        day = int(_re.match(r"^monthly on day (\d+)$", s).group(1))
-        if not 1 <= day <= 31:
-            return None, None
-        pattern = {"type": "absoluteMonthly", "interval": 1, "dayOfMonth": day}
-        desc_cn = t("rec_monthly_day", day=day)
-    elif _re.match(r"^每月(第一|第二|第三|第四|最后)(一)?个(周[一二三四五六日]|星期[一二三四五六日])", s):
-        m = _re.match(r"^每月(第一|第二|第三|第四|最后)(一)?个(周[一二三四五六日]|星期[一二三四五六日])", s)
-        idx_map = {"第一": "first", "第二": "second", "第三": "third", "第四": "fourth", "最后": "last"}
-        day_part = m.group(3).replace("星期", "").replace("周", "")
-        day_idx = CN_DAYS.index("周" + day_part)
-        pattern = {"type": "relativeMonthly", "interval": 1, "index": idx_map[m.group(1)], "daysOfWeek": [EN_DAYS[day_idx]]}
-        desc_cn = t("rec_monthly_idx", idx=idx_name(idx_map[m.group(1)]), day=weekday_names()[day_idx])
-        if get_lang() == "zh":
-            desc_cn = desc_cn.replace("最后个", "最后一个")
-    elif _re.match(r"^每年(\d+)月(\d+)日", s):
-        m = _re.match(r"^每年(\d+)月(\d+)日", s)
-        month, day = int(m.group(1)), int(m.group(2))
-        if not (1 <= month <= 12 and 1 <= day <= 31):
-            return None, None
-        pattern = {"type": "absoluteYearly", "interval": 1, "dayOfMonth": day, "month": month}
-        desc_cn = t("rec_yearly", m=month, d=day)
-    elif _re.match(r"^yearly on (\d{1,2})/(\d{1,2})$", s):
-        m = _re.match(r"^yearly on (\d{1,2})/(\d{1,2})$", s)
-        month, day = int(m.group(1)), int(m.group(2))
-        if not (1 <= month <= 12 and 1 <= day <= 31):
-            return None, None
-        pattern = {"type": "absoluteYearly", "interval": 1, "dayOfMonth": day, "month": month}
-        desc_cn = t("rec_yearly", m=month, d=day)
-    else:
-        return None, None
-
+    if not isinstance(raw, str):
+        raise CalError(t("err_repeat_json"))
+    try:
+        pattern = json.loads(raw, object_pairs_hook=_unique_object)
+    except (ValueError, RecursionError):
+        raise CalError(t("err_repeat_json")) from None
+    if not isinstance(pattern, dict):
+        raise CalError(t("err_repeat_json"))
+    kind = pattern.get("type")
+    if not isinstance(kind, str) or kind not in _PATTERN_FIELDS:
+        _pattern_error("type must be one of: " + ", ".join(_PATTERN_FIELDS))
+    fields = _PATTERN_FIELDS[kind]
+    missing = fields - pattern.keys()
+    if missing:
+        _pattern_error(f"{kind} requires: " + ", ".join(sorted(missing)))
+    extra = pattern.keys() - fields
+    if extra:
+        _pattern_error(f"{kind} does not accept: " + ", ".join(sorted(extra)))
+    _pattern_int(pattern, "interval", 1, _INT32_MAX)
+    if "dayOfMonth" in fields:
+        _pattern_int(pattern, "dayOfMonth", 1, 31)
+    if "month" in fields:
+        _pattern_int(pattern, "month", 1, 12)
+    if kind == "absoluteYearly":
+        try:
+            # A leap year admits February 29 but rejects dates that never exist.
+            datetime(2000, pattern["month"], pattern["dayOfMonth"])
+        except ValueError:
+            _pattern_error("month/dayOfMonth must be a valid calendar date")
+    if "daysOfWeek" in fields:
+        days = pattern["daysOfWeek"]
+        if (not isinstance(days, list) or not days
+                or any(not isinstance(day, str) or day not in EN_DAYS for day in days)):
+            _pattern_error("daysOfWeek must be a nonempty array containing only: " + ", ".join(EN_DAYS))
+        if len(days) != len(set(days)):
+            _pattern_error("daysOfWeek must not contain duplicates")
+    if "firstDayOfWeek" in fields and pattern["firstDayOfWeek"] not in EN_DAYS:
+        _pattern_error("firstDayOfWeek must be one of: " + ", ".join(EN_DAYS))
+    if "index" in fields and pattern["index"] not in WEEK_INDEX:
+        _pattern_error("index must be one of: " + ", ".join(WEEK_INDEX))
+    start_date = start_date.date() if isinstance(start_date, datetime) else start_date
     recurrence = {
         "pattern": pattern,
-        "range": {
-            "type": "noEnd",
-            "startDate": start_date.strftime("%Y-%m-%d"),
-        },
+        "range": {"type": "noEnd", "startDate": start_date.isoformat()},
     }
-    return recurrence, desc_cn
+    return recurrence, _fmt_recurrence(recurrence)
 
 
 def _fmt_recurrence(rec):
@@ -146,15 +119,24 @@ def _fmt_recurrence(rec):
             head = t("rec_weekly") if interval == 1 else t("rec_every_n_weeks", n=interval)
             desc = head + t("rec_day_join").join(days)
     elif ttype == "absoluteMonthly":
-        desc = t("rec_monthly_day", day=p.get('dayOfMonth', '?'))
-    elif ttype == "relativeMonthly":
+        key = "rec_monthly_day" if interval == 1 else "rec_every_n_months_day"
+        desc = t(key, n=interval, day=p.get('dayOfMonth', '?'))
+    elif ttype in ("relativeMonthly", "relativeYearly"):
         idx = idx_name(p.get("index", ""))
         days = [names[i] for i, d in enumerate(EN_DAYS) if d in p.get("daysOfWeek", [])]
-        desc = t("rec_monthly_idx", idx=idx, day=days[0] if days else '?')
+        if ttype == "relativeMonthly":
+            key = "rec_monthly_idx" if interval == 1 else "rec_every_n_months_idx"
+        else:
+            key = "rec_yearly_idx" if interval == 1 else "rec_every_n_years_idx"
+        desc = t(key, n=interval, idx=idx, day=t("rec_day_join").join(days) if days else '?',
+                 m=p.get("month", "?"))
         if get_lang() == "zh":
             desc = desc.replace("最后个", "最后一个")
+        if len(days) > 1:
+            desc += t("rec_first_matching")
     elif ttype == "absoluteYearly":
-        desc = t("rec_yearly", m=p.get('month', '?'), d=p.get('dayOfMonth', '?'))
+        key = "rec_yearly" if interval == 1 else "rec_every_n_years"
+        desc = t(key, n=interval, m=p.get('month', '?'), d=p.get('dayOfMonth', '?'))
     else:
         desc = ttype
     rtype = r.get("type", "")
@@ -168,8 +150,8 @@ def _fmt_recurrence(rec):
 def _occurrence_number(rec, occ_dt):
     """数一下 occ 在系列里是第几次出现；算不出来返回 None。
 
-    从 range.startDate 按周期一天天数过去（上限 3650 天防死循环），
-    不调 /instances 端点——省一次请求，也躲开它的分页问题。
+    只计算逐日和每周规则。多周/月/年规则交给 Graph 展开，避免本地
+    估算忽略周起点、缺失日期等细节而显示错误序号。
 
     :param rec: recurrence 对象
     :param occ_dt: 某个出现的 start.dateTime
@@ -185,61 +167,59 @@ def _occurrence_number(rec, occ_dt):
     except Exception:
         return None
     ttype = p.get('type', '')
-    interval = max(p.get('interval', 1), 1)
-    if occ < start:
+    interval = p.get('interval', 1)
+    if type(interval) is not int or interval < 1 or occ < start:
         return None
     if ttype == 'daily':
-        return (occ - start).days // interval + 1
-    if ttype == 'weekly':
-        days = set(p.get('daysOfWeek', []))
-        if not days:
+        elapsed = (occ - start).days
+        return elapsed // interval + 1 if elapsed % interval == 0 else None
+    if ttype == 'weekly' and interval == 1:
+        days = p.get('daysOfWeek', [])
+        if not isinstance(days, list) or not days or any(day not in EN_DAYS for day in days):
             return None
         n = 1
         d = start
         while d <= occ:
             if (d - start).days > 3650:
                 return None
-            if ((d - start).days // 7) % interval == 0 and EN_DAYS[d.weekday()] in days:
+            if EN_DAYS[d.weekday()] in days:
                 if d == occ:
                     return n
                 n += 1
             d += timedelta(days=1)
         return None
-    if ttype in ('absoluteMonthly', 'relativeMonthly'):
-        return (occ.year - start.year) * 12 + (occ.month - start.month) + 1
-    if ttype == 'absoluteYearly':
-        return occ.year - start.year + 1
     return None
 
 def _build_recurrence(repeat, repeat_until, repeat_times, start_dt):
-    """按命令行参数拼定期规则（解析 + 结束条件），add/update 共用。
+    """按明确参数拼定期规则（JSON pattern + 结束条件），add/update 共用。
 
-    :param repeat: 规则描述
+    :param repeat: Graph recurrencePattern 的 JSON 字符串
     :param repeat_until: 结束日期（YYYY-MM-DD），可空
     :param repeat_times: 总次数，可空
     :param start_dt: 开始时间（用来定 range.startDate）
     :return: (recurrence dict, 人类可读描述)
-    :raises CalError: 规则看不懂 / 结束条件非法
+    :raises CalError: 结构或字段非法 / 结束条件非法或冲突
     """
-    recurrence, desc_cn = _parse_recurrence(repeat, start_dt)
-    if not recurrence:
-        raise CalError(t("err_repeat_unparseable", r=repeat))
+    recurrence, _ = _parse_recurrence(repeat, start_dt)
+    start_date = start_dt.date() if isinstance(start_dt, datetime) else start_dt
     # Graph 对定期事件若不显式指定 recurrenceTimeZone 会默认按 UTC 锚定循环，
     # 结果 originalStartTimeZone=UTC 而 originalEndTimeZone=本地时区，Outlook
     # 显示"开始是 UTC、结束是本地时间"。这里与 start/end 的 timeZone 保持一致
     recurrence["range"]["recurrenceTimeZone"] = LOCAL_TZ_NAME
+    if repeat_until is not None and repeat_times is not None:
+        raise CalError(t("err_repeat_end_conflict"))
     if repeat_until is not None:
         try:
-            until = datetime.strptime(repeat_until, "%Y-%m-%d")
-        except ValueError:
-            raise CalError(t("err_repeat_until_fmt", d=repeat_until))
-        if until.date() < start_dt.date():
-            raise CalError(t("err_repeat_until_before", u=repeat_until, s=start_dt.date()))
+            until = _parse_dt_arg(repeat_until, date_only=True)
+        except CalError:
+            raise CalError(t("err_repeat_until_fmt", d=repeat_until)) from None
+        if until.date() < start_date:
+            raise CalError(t("err_repeat_until_before", u=repeat_until, s=start_date))
         recurrence["range"]["type"] = "endDate"
-        recurrence["range"]["endDate"] = until.strftime("%Y-%m-%d")
+        recurrence["range"]["endDate"] = until.date().isoformat()
     elif repeat_times is not None:
-        if repeat_times < 1:
+        if type(repeat_times) is not int or not 1 <= repeat_times <= _INT32_MAX:
             raise CalError(t("err_repeat_count"))
         recurrence["range"]["type"] = "numbered"
         recurrence["range"]["numberOfOccurrences"] = repeat_times
-    return recurrence, desc_cn
+    return recurrence, _fmt_recurrence(recurrence)

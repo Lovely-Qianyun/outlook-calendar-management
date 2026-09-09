@@ -157,170 +157,11 @@ WINDOWS_TZ_MAP = {
     "Line Islands Standard Time": "Pacific/Kiritimati",
 }
 
-# 已废弃的旧 Windows 时区名（XP 时代注册表名）：只做"解析"方向的映射，
-# 不参与 IANA→Windows 反查——反查必须用现行官方名，否则会挑到旧名字。
+# 已废弃的旧 Windows 时区名（XP 时代注册表名）：解析后使用对应 IANA 名。
 LEGACY_WINDOWS_TZ_MAP = {
     "Indochina Time": "Asia/Bangkok",
     "Malay Peninsula Standard Time": "Asia/Kuala_Lumpur",
 }
-
-# IANA → Windows 名反向映射（Graph 的 timeZone 字段用 Windows 名最稳）。
-# 先反转规范表，再叠加常见非规范 IANA 别名（系统/时区库常报这些名字）。
-IANA_TO_WINDOWS = {v: k for k, v in WINDOWS_TZ_MAP.items()}
-IANA_TO_WINDOWS.update({
-    # 中国/东亚常用别名 → China Standard Time
-    "Asia/Hong_Kong": "China Standard Time",
-    "Asia/Macau": "China Standard Time",
-    "Asia/Chongqing": "China Standard Time",
-    "Asia/Harbin": "China Standard Time",
-    "Asia/Urumqi": "China Standard Time",
-    "Asia/Kashgar": "China Standard Time",
-    "PRC": "China Standard Time",
-    "ROC": "Taipei Standard Time",
-    # 欧洲常用别名
-    "Europe/Amsterdam": "W. Europe Standard Time",
-    "Europe/Andorra": "W. Europe Standard Time",
-    "Europe/Brussels": "W. Europe Standard Time",
-    "Europe/Copenhagen": "W. Europe Standard Time",
-    "Europe/Gibraltar": "W. Europe Standard Time",
-    "Europe/Luxembourg": "W. Europe Standard Time",
-    "Europe/Madrid": "W. Europe Standard Time",
-    "Europe/Malta": "W. Europe Standard Time",
-    "Europe/Monaco": "W. Europe Standard Time",
-    "Europe/Oslo": "W. Europe Standard Time",
-    "Europe/Rome": "W. Europe Standard Time",
-    "Europe/Stockholm": "W. Europe Standard Time",
-    "Europe/Vaduz": "W. Europe Standard Time",
-    "Europe/Vatican": "W. Europe Standard Time",
-    "Europe/Vienna": "W. Europe Standard Time",
-    "Europe/Zurich": "W. Europe Standard Time",
-    "Europe/Bratislava": "Central Europe Standard Time",
-    "Europe/Belgrade": "Central Europe Standard Time",
-    "Europe/Ljubljana": "Central Europe Standard Time",
-    "Europe/Podgorica": "Central Europe Standard Time",
-    "Europe/Prague": "Central Europe Standard Time",
-    "Europe/Sarajevo": "Central Europe Standard Time",
-    "Europe/Skopje": "Central Europe Standard Time",
-    "Europe/Tirana": "Central Europe Standard Time",
-    "Europe/Zagreb": "Central Europe Standard Time",
-    "Europe/Dublin": "GMT Standard Time",
-    "Europe/Guernsey": "GMT Standard Time",
-    "Europe/Isle_of_Man": "GMT Standard Time",
-    "Europe/Jersey": "GMT Standard Time",
-    "Europe/Lisbon": "GMT Standard Time",
-    "Atlantic/Canary": "GMT Standard Time",
-    "Atlantic/Faeroe": "GMT Standard Time",
-    "Atlantic/Madeira": "GMT Standard Time",
-    "Europe/Kiev": "FLE Standard Time",
-    "Europe/Uzhgorod": "FLE Standard Time",
-    "Europe/Zaporozhye": "FLE Standard Time",
-    # 美洲常用别名
-    "America/Toronto": "Eastern Standard Time",
-    "America/Montreal": "Eastern Standard Time",
-    "America/Nassau": "Eastern Standard Time",
-    "America/Atikokan": "Eastern Standard Time",
-    "America/Detroit": "Eastern Standard Time",
-    "America/Iqaluit": "Eastern Standard Time",
-    "America/Kentucky/Louisville": "Eastern Standard Time",
-    "America/Nipigon": "Eastern Standard Time",
-    "America/Thunder_Bay": "Eastern Standard Time",
-    "America/Indiana/Knox": "Central Standard Time",
-    "America/Rainy_River": "Central Standard Time",
-    "America/Rankin_Inlet": "Central Standard Time",
-    "America/Resolute": "Central Standard Time",
-    "America/Winnipeg": "Central Standard Time",
-    "America/Boise": "Mountain Standard Time",
-    "America/Cambridge_Bay": "Mountain Standard Time",
-    "America/Edmonton": "Mountain Standard Time",
-    "America/Inuvik": "Mountain Standard Time",
-    "America/Yellowknife": "Mountain Standard Time",
-    "America/Vancouver": "Pacific Standard Time",
-    "America/Glace_Bay": "Atlantic Standard Time",
-    "America/Goose_Bay": "Atlantic Standard Time",
-    "America/Moncton": "Atlantic Standard Time",
-    "America/Manaus": "SA Western Standard Time",
-    "America/Porto_Velho": "SA Western Standard Time",
-    "America/Boa_Vista": "SA Western Standard Time",
-    "America/Noronha": "UTC-02",
-    "America/Indianapolis": "US Eastern Standard Time",
-    # 亚洲/非洲/大洋洲常用别名
-    "Asia/Calcutta": "India Standard Time",
-    "Asia/Saigon": "SE Asia Standard Time",
-    "Asia/Kuala_Lumpur": "Singapore Standard Time",
-    "Asia/Kuwait": "Arab Standard Time",
-    "Asia/Bahrain": "Arab Standard Time",
-    "Asia/Qatar": "Arab Standard Time",
-    "Asia/Muscat": "Arabian Standard Time",
-    "Africa/Addis_Ababa": "E. Africa Standard Time",
-    "Africa/Asmara": "E. Africa Standard Time",
-    "Africa/Dar_es_Salaam": "E. Africa Standard Time",
-    "Africa/Djibouti": "E. Africa Standard Time",
-    "Africa/Kampala": "E. Africa Standard Time",
-    "Africa/Mogadishu": "E. Africa Standard Time",
-    "Africa/Accra": "Greenwich Standard Time",
-    "Africa/Bamako": "Greenwich Standard Time",
-    "Africa/Banjul": "Greenwich Standard Time",
-    "Africa/Conakry": "Greenwich Standard Time",
-    "Africa/Dakar": "Greenwich Standard Time",
-    "Africa/Freetown": "Greenwich Standard Time",
-    "Africa/Lome": "Greenwich Standard Time",
-    "Africa/Monrovia": "Greenwich Standard Time",
-    "Africa/Nouakchott": "Greenwich Standard Time",
-    "Africa/Ouagadougou": "Greenwich Standard Time",
-    "Africa/Harare": "South Africa Standard Time",
-    "Africa/Blantyre": "South Africa Standard Time",
-    "Africa/Gaborone": "South Africa Standard Time",
-    "Africa/Lusaka": "South Africa Standard Time",
-    "Africa/Maputo": "South Africa Standard Time",
-    "Africa/Maseru": "South Africa Standard Time",
-    "Africa/Mbabane": "South Africa Standard Time",
-    "Africa/Kigali": "South Africa Standard Time",
-    "Africa/Tunis": "W. Central Africa Standard Time",
-    "Africa/Luanda": "W. Central Africa Standard Time",
-    "Africa/Kinshasa": "W. Central Africa Standard Time",
-    "Africa/El_Aaiun": "Morocco Standard Time",
-    "Pacific/Johnston": "Hawaiian Standard Time",
-    "Pacific/Rarotonga": "Hawaiian Standard Time",
-    "Pacific/Tahiti": "Hawaiian Standard Time",
-    "Pacific/Midway": "UTC-11",
-    "Pacific/Pago_Pago": "UTC-11",
-    "Pacific/Niue": "UTC-11",
-    "Pacific/Fakaofo": "UTC+13",
-    "Antarctica/McMurdo": "New Zealand Standard Time",
-    # tzdata 旧别名（backward 链接）：语义与对应 Windows 官方名完全一致才收录
-    "EST5EDT": "Eastern Standard Time",
-    "CST6CDT": "Central Standard Time",
-    "MST7MDT": "Mountain Standard Time",
-    "PST8PDT": "Pacific Standard Time",
-    "JST-9": "Tokyo Standard Time",
-    "Hongkong": "China Standard Time",
-    "Japan": "Tokyo Standard Time",
-    "Korea": "Korea Standard Time",
-    "ROK": "Korea Standard Time",
-    "W-SU": "Russian Standard Time",
-    "Eire": "GMT Standard Time",
-    "GB": "GMT Standard Time",
-    "GB-Eire": "GMT Standard Time",
-    "WET": "GMT Standard Time",
-    "Portugal": "GMT Standard Time",
-    "Greenwich": "GMT Standard Time",
-    "Iceland": "Greenwich Standard Time",
-    "Iran": "Iran Standard Time",
-    "Israel": "Israel Standard Time",
-    "Cuba": "Cuba Standard Time",
-    "Egypt": "Egypt Standard Time",
-    "Libya": "Libya Standard Time",
-    "Turkey": "Turkey Standard Time",
-    "Poland": "Central European Standard Time",
-    "Jamaica": "SA Pacific Standard Time",
-    "Navajo": "US Mountain Standard Time",
-    "Singapore": "Singapore Standard Time",
-    "Zulu": "UTC",
-    "Universal": "UTC",
-    "UCT": "UTC",
-    "UTC0": "UTC",
-    "GMT0": "UTC",
-})
 
 # ── 时区处理 ──────────────────────────────────────
 
@@ -359,8 +200,8 @@ def _resolve_tz(tz_str):
 def _mk_tz(tz_name):
     """把探测到的时区名变成 (tzinfo, 传给 Graph 的时区名)；解析不了返回 None。
 
-    输入可能是 Windows 名或 IANA 名：Windows 名先查表映射成 IANA 名再交给
-    ZoneInfo；传给 Graph 的名字优先用 Windows 官方名（兼容性最稳）。
+    Windows 名先查表映射成 IANA 名交给 ZoneInfo，输出仍保留现行 Windows 名；
+    IANA 输入保留原名，保证 context 返回的名字再次解析后仍是同一套时区规则。
 
     :param tz_name: 候选时区名
     :return: (tzinfo, Graph 时区名) 或 None
@@ -374,8 +215,28 @@ def _mk_tz(tz_name):
         except Exception:
             zi = None
         if zi is not None:
-            return zi, IANA_TO_WINDOWS.get(iana, iana)
+            return zi, tz_name if tz_name in WINDOWS_TZ_MAP else iana
     return None
+
+
+def resolve_timezone(name):
+    """校验显式时区参数，返回 (Graph 时区名, tzinfo)，未知名称直接报错。
+
+    接受当前 Windows 时区名或 tzdata 中存在的 IANA 名。IANA 输入保留原名，
+    不使用多对一的 Windows 反向映射，避免改变该地区的实际时区规则。
+    此函数不修改本地时区全局变量，也不在失败时回退 UTC。
+    """
+    if not isinstance(name, str) or not name or name != name.strip():
+        raise CalError(t("err_timezone", tz=name))
+    if name in ("UTC", "GMT", "Etc/UTC", "Etc/GMT"):
+        return name, timezone.utc
+    iana = WINDOWS_TZ_MAP.get(name, name)
+    if ZoneInfo:
+        try:
+            return name, ZoneInfo(iana)
+        except (KeyError, ValueError, OSError):
+            pass
+    raise CalError(t("err_timezone", tz=name))
 
 
 _POSIX_TZ = object()  # 哨兵：TZ 是解析不了的 POSIX 规则串（CST-8/EST5EDT 等）
@@ -544,7 +405,7 @@ def _detect_local_tz():
         if r is not None:
             return r
         print(t("warn_tz_utc"), file=sys.stderr)
-        return datetime.now().astimezone().tzinfo, "UTC"
+        return timezone.utc, "UTC"
     if env_r is not None:
         return env_r
     for probe in (_tz_from_winreg, _tz_from_system_tzinfo,
@@ -554,7 +415,7 @@ def _detect_local_tz():
         if r is not None:
             return r
     print(t("warn_tz_utc"), file=sys.stderr)
-    return datetime.now().astimezone().tzinfo, "UTC"
+    return timezone.utc, "UTC"
 
 
 LOCAL_TZ, LOCAL_TZ_NAME = _detect_local_tz()
@@ -599,7 +460,7 @@ def _local_time_exists(dt, tz=None):
 
     判定用 roundtrip：naive 时间套上 tz → 转 UTC → 转回 tz，
     回不到原值说明该时刻被折叠/跳过（不存在）。歧义时间（回拨日 01:30）
-    fold=0 自洽，不告警——两个时刻都合法，只是选择第一个。
+    fold=0 自洽；本函数只判断存在性，歧义由调用方另外校验。
 
     :param dt: naive datetime
     :param tz: 时区（默认本机 LOCAL_TZ；测试可注入夏令时地区）
@@ -613,134 +474,43 @@ def _local_time_exists(dt, tz=None):
         return True
 
 
-# ── 相对时间词（今天/明天/本周X…）──
-# 换算基准是运行时刻的系统时钟（now 可注入供测试）："今天"这类词由命令解析
-# 而不是 agent 凭上下文推算，从根上杜绝"创建到昨天"这类事故。
-
-_CN_WEEKDAY = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
-_EN_WEEKDAY = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
-               "friday": 4, "saturday": 5, "sunday": 6}
-_CN_TIME_RE = re.compile(r"(凌晨|早上|上午|中午|下午|晚上)?(\d{1,2})点(半)?$")
+# CLI 只接受明确的日期与时间；自然语言含义由调用方先解析。
+_DATE_ARG_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_DATETIME_ARG_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}")
 
 
-def _resolve_relative_date(w, now):
-    """把相对日期词解析成 date；不认识返回 None。
+def _parse_dt_arg(s, *, date_only=False):
+    """校验明确的命令行日期时间，返回不带时区的 datetime。
 
-    :param w: 今天/明天/后天/本周X/这周X/下周X/today/this friday/next friday…
-    :param now: 基准时刻（系统时钟）
-    :return: date 或 None
-    """
-    if w in ("今天", "今日", "today"):
-        return now.date()
-    if w in ("明天", "明日", "tomorrow"):
-        return now.date() + timedelta(days=1)
-    if w in ("后天", "後天", "day after tomorrow"):
-        return now.date() + timedelta(days=2)
-    low = w.lower()
-    for prefix, offset in (("本周", 0), ("这周", 0), ("下周", 7)):
-        if w.startswith(prefix):
-            idx = _CN_WEEKDAY.get(w[len(prefix):].replace("星期", "").replace("礼拜", "").replace("周", ""))
-            if idx is not None:
-                # 周一起始：本周一 = 今天 - weekday
-                return now.date() - timedelta(days=now.weekday()) + timedelta(days=offset + idx)
-            return None
-    for prefix, offset in (("this ", 0), ("next ", 7)):
-        if low.startswith(prefix):
-            idx = _EN_WEEKDAY.get(low[len(prefix):])
-            if idx is not None:
-                return now.date() - timedelta(days=now.weekday()) + timedelta(days=offset + idx)
-            return None
-    return None
-
-
-def _relative_dt(s, now=None):
-    """把相对时间词（可带时刻）解析成 naive datetime；不认识返回 None。
-
-    支持：今天/明天/后天/今日/明日、本周X/这周X/下周X、today/tomorrow/
-    day after tomorrow、this X/next X；时刻可用 24 小时制（"今天 14:00"）
-    或中文（"今天下午2点"、"明天上午9点半"）。
-
-    :param s: 相对时间输入
-    :param now: 基准时刻，默认系统当前时间
-    :return: naive datetime 或 None
-    """
-    # 基准用 LOCAL_TZ 而不是裸 datetime.now()：与显示/查询窗口共用同一时区基准，
-    # 避免系统墙钟与探测链结果不一致时"今天"差一天的极端情况
-    now = now or datetime.now(LOCAL_TZ)
-    s = s.strip()
-    # 1) 整串直接是日期词（今天 / day after tomorrow）
-    day = _resolve_relative_date(s, now)
-    date_part, minutes = s, None
-    if day is None:
-        # 2) "日期词 HH:MM"（今天 14:00）
-        if " " in s:
-            head, tail = s.rsplit(" ", 1)
-            try:
-                t = datetime.strptime(tail, "%H:%M")
-            except ValueError:
-                return None
-            date_part, minutes = head, t.hour * 60 + t.minute
-        else:
-            # 3) 中文时刻后缀（今天下午2点 / 明天上午9点半）
-            m = _CN_TIME_RE.search(s)
-            if m:
-                per, hh, half = m.group(1), int(m.group(2)), m.group(3)
-                if per in ("下午", "晚上"):
-                    hh = hh if hh == 12 else hh + 12
-                if per in ("晚上", "凌晨") and hh == 12:
-                    hh = 0  # 晚上12点/凌晨12点 = 当天 0 点
-                minutes = hh * 60 + (30 if half else 0)
-                if minutes >= 1440:
-                    return None
-                date_part = s[:m.start()]
-        day = _resolve_relative_date(date_part, now)
-        if day is None:
-            return None
-    if minutes is None:
-        return datetime.combine(day, datetime.min.time())
-    return datetime.combine(day, datetime.min.time()) + timedelta(minutes=minutes)
-
-
-def _parse_dt_arg(s, *, date_only=False, now=None):
-    """解析命令行给的时间参数；格式不对抛 CalError（友好提示，不甩 traceback）。
-
-    标准格式："2026-08-10" 或 "2026-08-10 09:00"；
-    也支持相对时间词（今天/明天/本周五/今天下午2点…），按运行时刻系统时钟换算。
-
-    :param s: 命令行时间
-    :param date_only: True 时只收日期，不收时间
-    :param now: 基准时刻（测试注入用，默认系统当前时间）
-    :return: naive datetime
-    :raises CalError: 时间格式无法解析
+    仅接受补零的 YYYY-MM-DD、YYYY-MM-DD HH:MM 或 YYYY-MM-DDTHH:MM。
+    date_only=True 时只接受日期。时区由单独的命令参数指定，禁止嵌入偏移、
+    秒或自然语言表达，也不读取时钟或补全缺失字段。
     """
     if not s:
         raise CalError(t("err_time_empty"))
-    if date_only:
+    error_key = "err_time_date" if date_only else "err_time_both"
+    if not isinstance(s, str):
+        raise CalError(t(error_key, s=s))
+    is_date = _DATE_ARG_RE.fullmatch(s) is not None
+    is_datetime = not date_only and _DATETIME_ARG_RE.fullmatch(s) is not None
+    if is_date or is_datetime:
         try:
-            return datetime.strptime(s, "%Y-%m-%d")
+            return datetime(
+                int(s[:4]), int(s[5:7]), int(s[8:10]),
+                int(s[11:13]) if is_datetime else 0,
+                int(s[14:16]) if is_datetime else 0,
+            )
         except ValueError:
             pass
-        rel = _relative_dt(s, now)
-        if rel is not None and rel.time() == datetime.min.time():
-            return rel
-        raise CalError(t("err_time_date", s=s))
-    if " " in s:
-        try:
-            return datetime.strptime(s, "%Y-%m-%d %H:%M")
-        except ValueError:
-            pass
-        rel = _relative_dt(s, now)
-        if rel is not None:
-            return rel
-        raise CalError(t("err_time_dt", s=s))
+    raise CalError(t(error_key, s=s))
+
+
+def _shift_days(value, days):
+    """Calendar-day arithmetic with a structured error at Python's date limits."""
     try:
-        return datetime.strptime(s, "%Y-%m-%d")
-    except ValueError:
-        pass
-    rel = _relative_dt(s, now)
-    if rel is not None:
-        return rel
-    raise CalError(t("err_time_both", s=s))
+        return value + timedelta(days=days)
+    except (OverflowError, TypeError) as exc:
+        raise CalError(t("err_date_offset")) from exc
 
 
 def _all_day_range(start_str, end_str):

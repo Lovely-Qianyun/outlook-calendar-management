@@ -21,8 +21,10 @@
 
 ## Authentication
 
+Run from the project root.
+
 ```bash
-python outlook_setup.py <your Client ID>
+python scripts/outlook_setup.py <your Client ID>
 ```
 
 The rest of the flow is identical to the default app: the script prints a code → open `https://www.microsoft.com/link` in a browser and enter it → authorize with your Outlook account. The token renews automatically.
@@ -33,4 +35,4 @@ The rest of the flow is identical to the default app: the script prints a code �
 |---------|-------------|
 | Device code reports "app not found" | Account type isn't "Personal Microsoft accounts", or "Allow public client flows" isn't enabled |
 | 403 Forbidden | The `Calendars.ReadWrite` delegated permission wasn't added |
-| Verification code expired | Re-run `python outlook_setup.py` and try again |
+| Verification code expired | Re-run `python scripts/outlook_setup.py` and try again |

@@ -1,98 +1,69 @@
 ---
 name: outlook-calendar-management
-description: "Use this skill whenever the user mentions any calendar operation on Outlook calendar / Microsoft calendar: view schedules, find events (title/location/category), add meetings/birthdays/reminders, change time or title, move to another date, delete (single occurrence or whole recurring series), check free time slots, query the next occurrence of a recurring event, list recently added events. Manages the Outlook calendar (Microsoft account / outlook.com). Does NOT handle Outlook mail (the himalaya skill does) or other calendars (Google Calendar etc.)."
+description: "View, find, add, update, move, and delete Outlook / Microsoft calendar events, including recurring events and free-time queries. Use when the user names Outlook calendar or the conversation already establishes it as the calendar to manage. Does not handle email or other calendar products."
 license: "MIT"
 metadata:
-  version: 2.2.0
+  version: 3.0.0
 ---
 
-# Outlook Calendar Assistant
+# Outlook Calendar Management
 
-Manage your Outlook calendar (Microsoft account / outlook.com) through conversation - no need to open the Outlook app. Calendar stays in sync across phone, computer, and web.
+Manage the connected account's default Outlook calendar. Interpret the user's language and context, then pass explicit values to the bundled Python CLI. The backend validates dates and recurrence patterns, handles timezone conversion, and calls Microsoft Graph; it does not interpret natural-language dates or recurrence rules.
 
-## What It Can Do
+## Run the CLI
 
-| What you want | How |
+Resolve paths relative to this skill directory. Use the available Python 3.10+ interpreter (`python` or `python3`):
+
+```bash
+python "<skill-directory>/scripts/outlook_cal.py" context --json --lang en
+```
+
+Examples below omit this prefix. Prefer `--json`; JSON keys do not change with language. Use `--lang zh` for Chinese conversations and `--lang en` otherwise; respond in the user's language. `--json`, `--lang`, and `--timezone` work before or after any command.
+
+For first connection or account changes, read [configuration.md](references/configuration.md). Authentication uses `scripts/outlook_setup.py`. For an isolated test login, follow the separate `OCAL_TOKEN_PATH` configuration and verify the intended account before writes. Login and calendar commands install missing requests/msal/tzdata dependencies automatically. `context` and `date` do not access the calendar, authenticate, or install packages; named regional timezones need system timezone data or tzdata.
+
+## Resolve intent before execution
+
+- When resolving relative dates, get `context --json` unless fresh current time and effective timezone are already available. It returns `now`, `today`, `timezone`, `utc_offset`, lowercase English `weekday`, and Monday's `week_start`. If the user specifies a timezone, pass it to `context --timezone "Area/City" --json`. Reuse that named timezone explicitly in subsequent calendar commands; UTC offsets alone do not describe daylight-saving rules.
+- Turn relative language into a precise date using `date --base YYYY-MM-DD --days N --json` or Python `datetime`/`calendar` arithmetic. The helper adds signed calendar days without reading a clock. For this Friday, add 4 to `context.week_start`; for next Monday, add 7. Resolve ambiguous intent from context or ask only for missing information that affects the operation.
+- Calendar inputs accept only zero-padded `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, or `YYYY-MM-DDTHH:MM`; date-only arguments reject times. Supply timezone separately. Timed creation needs both start and end; all-day creation requires `--all-day`. Do not invent a duration or turn a missing time into an all-day event.
+- Before a write, retain the normalized target, absolute dates/times, timezone, and requested fields. Reuse these values for verification and any retry, including across midnight; do not reinterpret the original relative phrase.
+
+## Choose and carry out the operation
+
+| Task | Command |
 |---|---|
-| See your schedule: today/tomorrow/this week/a time range | `today` / `tomorrow` / `week` / `list` |
-| Find events: by title/location/notes/category | `list --search` / `list --category` |
-| Query "what did I add yesterday" | `list --created-after <date>` |
-| Add events: meetings/birthdays/reminders/recurring | `add` |
-| Modify events: time/title/category/reminder etc. | `update` |
-| Move events: shift by days or to a date, keep the time slot | `move` |
-| Delete events; recurring events: single occurrence or whole series | `delete` |
-| Ask when someone is free / free time slots | `free` |
-| Next occurrence of a recurring event | `next` |
-| View an event's details | `read` |
-| Calendar unreachable / check status | `status` |
-| Machine-readable output for programs/scripts | append `--json` to any command |
+| Events on a date / date range | `list --from YYYY-MM-DD --days N --json` |
+| Filter that range | Add `--search "term"`, `--category "name"`, or `--reminders` |
+| Events created in a date interval | `list --created-after YYYY-MM-DD --created-before YYYY-MM-DD --json` |
+| Details / next recurring occurrence | `read <ID>` / `next <ID>` |
+| Create / edit / move / delete | `add` / `update` / `move` / `delete` |
+| Free slots / connection state | `free YYYY-MM-DD --from HH:MM --to HH:MM` / `status` |
 
-> Prefer small output: for "what/when" questions use `list --summary` or `--json` instead of pulling full details; when unsure about the time range, start with the default 7 days.
+`list` requires an explicit `--from` or `--created-after`. Its `--days N` spans N calendar dates with an exclusive end at the next midnight. Creation filters are independent of scheduled dates; `--created-before` is exclusive. For an unspecified schedule range, a reasonable initial query is seven days from `context.today`; state the range when reporting it. `--summary` gives daily counts only, so use normal JSON for titles and times.
 
-## Iron Rules
+Use returned `id` and `seriesMasterId` values. Before editing or deleting, obtain the relevant existing fields through `read` or reuse fresh complete results. Resolve multiple matches and distinguish one occurrence from the whole recurring series. Existing authorization for an identified target and scope remains valid; `--json`/`-y` only skip CLI prompts. Prefer an explicit ID after identifying the target; `--search` is a convenience with a bounded search window.
 
-The following rules apply to every operation - never skip them:
+After a write, read back once and verify the requested fields. After deletion, query the relevant window and confirm absence. Report actual before/after values. For an uncertain write, check server state before resubmitting the frozen request; a failed verification is not evidence that the write failed. Retry a transient read once; diagnose authentication and permission errors with `status` and [troubleshooting.md](references/troubleshooting.md). If recovery fails, explain what remains unresolved.
 
-1. **Fetch "current time + current timezone" before every operation**: **before any operation begins**, run a command to get the system's current time and timezone - Windows (PowerShell): `Get-Date` + `Get-TimeZone`; Linux/macOS: `date` (e.g. `date +"%F %T %Z"`). **Never use dates or timezones seen in an earlier session.** To cross-check "what day is today", also run `status` (its output includes the current date with year and weekday). Relative time words can be passed to commands directly (`today 14:00`, `this Friday 15:00`); the command resolves them against the system clock at run time and the output shows the resolved date - verify it is not yesterday
-2. **Confirm before deleting**: restate the event to delete (title + time) to the user and obtain explicit consent before executing
-3. **Read before modifying**: run `read` to get the current content first, then decide what to change
-4. **Event IDs come only from output**: the 🆔 line in command output is the event ID - never guess or fabricate
-5. **Verify by reading back, then report**: after add/update/move/delete, run `read`/`list` once to verify the actual result (title + time) matches the intent, then report to the user; never claim "done" based only on the command's return value
-6. **Don't retry blindly on failure**: when a command exits non-zero, first read the ❌ line (the error field in `--json` mode), then act on the hint - permission/login issues → re-run `python outlook_setup.py`; not found → widen the time range or change the search term; never re-run the exact same command. If still stuck, follow `references/troubleshooting.md` or report honestly to the user
+## Examples of normalization
 
-## Output Contract
+These dates are hypothetical: assume `context` reports **2026-09-09, Asia/Shanghai**, with `week_start` **2026-09-07**. Derive real dates from the current context rather than copying these values.
 
-Command output is the interface between the agent and the scripts - rely on structure only, never on copy:
+- **"Move what I added yesterday to today."** Calculate yesterday with `date --base 2026-09-09 --days -1 --json`. Find candidates using `list --created-after 2026-09-08 --created-before 2026-09-09 --timezone Asia/Shanghai --json`, then identify the event and use `move <ID> --to 2026-09-09 --timezone Asia/Shanghai --json`. Its original scheduled date may be in the future; creation date does not determine the move offset.
+- **"Add a half-hour meeting this Friday at 15:00, remind me 10 minutes before."** Calculate Friday with `date --base 2026-09-07 --days 4 --json`, then use `add "Meeting" "2026-09-11 15:00" "2026-09-11 15:30" --remind 10 --timezone Asia/Shanghai --json`.
+- **"Am I free this Friday 14:00–17:00?"** After the same date calculation, use `free 2026-09-11 --from 14:00 --to 17:00 --timezone Asia/Shanghai --json`.
+- **"Change the weekly sync to Wednesday."** Establish occurrence versus series scope. For a series rule, read [recurring-events.md](references/recurring-events.md), construct a Graph pattern JSON file, and use `update <seriesMasterId> --repeat-file <pattern-file> --timezone <resolved-zone> --json`. Preserve or intentionally change the existing end condition; explain the effect on exceptions before applying an authorized series change.
 
-1. **Extract by anchor + structure**: 🆔/✅/⚠️/🆕 anchors, indentation, `HH:MM-HH:MM` slots, and JSON structure form the language-independent protocol; in-line copy follows the language and is never an extraction basis
-2. **Event IDs come only from the 🆔 line** (never guess/fabricate); the recurring series master event ID comes from the 🆕 line (the "🆕 + colon" structure; copy before the colon follows the language)
-3. **Failure signals**: exit code 1 + a `❌` line on stderr; in `--json` mode stdout carries `{"error": ..., "exit": 1}`
-4. **Always use `--json` for programmatic/batch scenarios**: stdout is pure JSON with no human-oriented text mixed in
+## Output and references
 
-## Common Tasks
+In JSON operation mode stdout contains one JSON value; diagnostics go to stderr. Check the exit code: errors use `{"error": ..., "exit": 1}`; disconnected `status` returns its connection object with `connected: false`. `--help` remains text. Parse decoded JSON, including Unicode escapes. For free time, use JSON because human output without listed slots may mean entirely free or entirely busy.
 
-### "What's my schedule this week / next week?"
-→ `week` for this week, `list --days 7` for the next 7 days. Use `list --days 30` for longer; `list --past 30` for the past.
-
-### "That thing I added yesterday - move it to today"
-→ ① `list --created-after <yesterday's date>` to find it, note the 🆔 → ② `read` to confirm it's the right one → ③ `move <ID> --days 1` (or `--to today`, keeping the original time slot) → ④ verify by reading back, then tell the user "moved from yesterday X to today X". When the keyword is distinctive enough, do it in one step: `move --search "keyword" --days 1` (a unique match operates directly; multiple matches list candidates).
-
-### "Add a meeting on Friday afternoon with a 10-minute reminder"
-→ `add "Meeting name" "this Friday 15:00" "this Friday 16:00" --remind 10`.
-"A meeting at 2 pm today" → `add "Meeting name" "today 14:00" "today 15:00"`. Relative time words are resolved by the command against the system's current date; the output shows the concrete date - confirm it's correct. A date without a time is treated as all-day; time conflicts are flagged as a warning, not a blocker, by default.
-
-### "Change the weekly sync to Wednesday"
-→ For recurring events, "this occurrence" and "the whole series" are different things: first `read` to get the series master event ID (🆕 line) → `update <masterID> --repeat "every wednesday"`. Note: changing the series rule resets any occurrences that were individually modified before - warn the user first.
-
-### "What time am I free on Friday afternoon?"
-→ `free "2026-08-14" --from 09:00 --to 18:00` lists the free time slots.
-
-### "I can't find Friday's meeting"
-→ ① `list --search "meeting"` returns nothing - check the search term and time range first (default only covers the next 7 days) → ② widen with `list --days 14` or `--past` → ③ if still nothing, honestly tell the user "not found" and suggest alternatives - **never fabricate events**.
-
-### "Calendar unreachable / permission error"
-→ ① run `status` to confirm the connection and login state → ② on invalid_grant/401/403 follow `references/troubleshooting.md` (usually re-run `python outlook_setup.py` to re-authorize) → ③ for network issues, one retry after a moment is fine; if it still fails, report honestly.
-
-## Key Concepts
-
-- **Recurring events** (weekly sync, 15th of every month...): modify/delete on "one occurrence" affects only that occurrence; changing the rule or deleting the whole series must operate on the **master event**. See `references/recurring-events.md`
-- **Environment**: Windows / Linux / macOS all supported; `python` in the examples may be `python3` on some systems (e.g. macOS) - use the actual interpreter name
-- **Time input**: timed events use `YYYY-MM-DD HH:MM` ("3 pm" = `15:00`); all-day events take a date only; relative times are supported (`today`/`tomorrow`/`this X`/`next X` optionally with a time), resolved by the command against the run-time system clock - **never compute dates yourself** (full conventions in `references/commands.md`). Timezone is handled automatically in the computer's local timezone with cross-timezone conversion; if detection fails, set the `TZ` environment variable (e.g. `TZ=Asia/Shanghai`). All-day events are written in the mailbox's preferred timezone and never span two days even when the machine timezone differs from the mailbox's; this feature needs the `MailboxSettings.Read` permission. The full authorization covers 3 permissions: `Calendars.ReadWrite` (event read/write), `MailboxSettings.Read` (mailbox timezone), `User.Read` (sign-in identity) - **after upgrading, re-run `python outlook_setup.py` once to re-authorize**
-- **Confirmation & scripting**: scripts ask for confirmation by default; in agent scenarios use `-y` to skip (in non-interactive environments where input is unavailable, the script auto-cancels)
-- **Output language**: auto-selected by system language (Chinese system → Chinese, others → English); override with `--lang zh|en` or the `OCAL_LANG` environment variable. Extraction relies only on the anchors and structure in "Output Contract" - language-independent
-- **Auto-install on first run**: missing `requests`/`msal`/`tzdata` are pip-installed automatically on first run. Missing `tzdata` breaks Windows timezone resolution and shifts event times - keep it. On install failure, manual commands are shown; if "dependencies still missing" is reported, restart the terminal
-
-## Output Language
-Determine the language of the user's current conversation (look at the current message and recent conversation):
-- If the user writes in Chinese (中文), respond in Chinese and pass `--lang zh` on every command.
-- Otherwise, respond in English and pass `--lang en`.
-Never ask the user which language they want. The script falls back to the system language; your override based on the conversation wins.
-
-## Detailed Reference
-
-| File | When to read |
+| Read when | Reference |
 |---|---|
-| `references/commands.md` | Full parameter list and more examples |
-| `references/recurring-events.md` | Recurring events (create/modify occurrence/delete series) |
-| `references/configuration.md` | First-time connection, switching accounts, bring-your-own Azure app |
-| `references/troubleshooting.md` | Errors, failures, unexpected results |
+| Parameters, explicit time formats, reminders, query boundaries, or JSON shapes | [commands.md](references/commands.md) |
+| Recurrence pattern fields, end conditions, occurrences, or whole series | [recurring-events.md](references/recurring-events.md) |
+| Connecting, switching accounts, or Azure app setup | [configuration.md](references/configuration.md) |
+| Authentication, installation, timezone errors, or unexpected results | [troubleshooting.md](references/troubleshooting.md) |
+
+Timed events use the selected effective timezone. All-day dates are written in the mailbox timezone when available, falling back to the effective timezone; this preserves their calendar dates in Outlook. Investigate timezone/permission discrepancies before repeating a write.

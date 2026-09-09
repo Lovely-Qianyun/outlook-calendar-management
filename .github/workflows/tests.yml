@@ -1,7 +1,7 @@
 name: tests
 
 # 离线单元测试 CI：三平台 × 两个 Python 版本。
-# 全部 mock 网络，不碰真实账户；实机演练（drill.sh）仍需手动跑。
+# 全部 mock 网络，不碰真实账户；实机演练（tests/integration/drill.py）需手动跑。
 on:
   push:
   pull_request:

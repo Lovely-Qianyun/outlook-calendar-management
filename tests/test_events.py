@@ -12,6 +12,7 @@
 import json
 from datetime import datetime, date
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -198,7 +199,7 @@ class TestEventDateStr:
 class TestPrintEvents:
     """列表打印 _print_events。
 
-    list/today/next 共用的显示逻辑。这里盯一个协议级要求：
+    list/next 共用的显示逻辑。这里盯一个协议级要求：
     每一行必须带 🆔 锚点——agent 从它提取事件 ID，漏了输出协议就断了。
     """
 
@@ -397,33 +398,19 @@ class TestCmdAdd:
         assert ev.cmd_add(self._args()) == 0
         assert "✅ Added to calendar:" in capsys.readouterr().out
 
-    def test_default_end_one_hour(self, monkeypatch):
-        """没给结束时间时默认开始后 1 小时。
-
-        用户只写开始时间是常见用法（"加个 9 点的会"），
-        结束时间自动补成 10:00。
-        """
-        calls = {}
-        def fake(method, endpoint, token, data=None, prefer_immutable=False):
-            calls["data"] = data
-            return _event()
-        _mock_net(monkeypatch, call_fn=fake)
-        ev.cmd_add(self._args(end=None))
-        assert calls["data"]["end"]["dateTime"] == "2026-08-10T10:00:00"
-
-    def test_date_only_becomes_all_day(self, monkeypatch):
-        """只给日期时自动按全天处理。
-
-        add 只给日期没给时间，默认是全天日程而不是报错，
-        这是对"加个生日"这类场景的刻意设计。
-        """
-        calls = {}
-        def fake(method, endpoint, token, data=None, prefer_immutable=False):
-            calls["data"] = data
-            return _event()
-        _mock_net(monkeypatch, call_fn=fake)
-        ev.cmd_add(self._args(start="2026-08-10", end=None))
-        assert calls["data"]["isAllDay"] is True
+    @pytest.mark.parametrize("options", [
+        {"end": None},
+        {"start": "2026-08-10", "end": None},
+        {"start": "2026-08-10", "end": "2026-08-11"},
+        {"end": "2026-08-11"},
+    ])
+    def test_timed_add_requires_explicit_time_bounds(self, monkeypatch, options):
+        """Missing times or an end must fail before any event is written."""
+        calls = []
+        _mock_net(monkeypatch, call_fn=lambda *a, **k: calls.append(a) or _event())
+        with pytest.raises(CalError):
+            ev.cmd_add(self._args(**options))
+        assert not any(args[0] == "POST" for args in calls)
 
     def test_multi_day_all_day(self, monkeypatch):
         """全天给结束日期 → 多天全天，Graph 的 end 存末日次日 00:00。
@@ -660,8 +647,10 @@ class TestCmdUpdate:
             return _event(subject="x")
         _mock_net(monkeypatch, call_fn=fake)
         assert ev.cmd_update(self._args(start="2026-09-01 09:00", end="2026-09-01 10:00",
-                                        repeat="每天")) == 0
+                                        repeat='{"type":"daily","interval":1}',
+                                        repeat_until="2026-09-30")) == 0
         assert calls["patch"]["recurrence"]["range"]["startDate"] == "2026-09-01"
+        assert calls["patch"]["recurrence"]["range"]["endDate"] == "2026-09-30"
 
     def test_update_multi_day_all_day(self, monkeypatch):
         """update --all-day --start/--end 两个日期 → 多天全天区间。"""
@@ -685,6 +674,63 @@ class TestCmdUpdate:
         _mock_net(monkeypatch, call_fn=lambda *a, **k: _event())
         with pytest.raises(CalError):
             ev.cmd_update(self._args(all_day=True, start="2026-08-10", end="2026-08-12 18:00"))
+
+    @pytest.mark.parametrize("options, expected_start, expected_end", [
+        ({"start": "2026-08-11"}, "2026-08-11T00:00:00", "2026-08-14T00:00:00"),
+        ({"end": "2026-08-14"}, "2026-08-10T00:00:00", "2026-08-15T00:00:00"),
+        ({"all_day": True}, "2026-08-10T00:00:00", "2026-08-14T00:00:00"),
+    ])
+    def test_partial_all_day_update_preserves_unspecified_bound(self, monkeypatch, options,
+                                                              expected_start, expected_end):
+        """Updating one all-day bound must preserve the other, including multi-day spans."""
+        existing = _event(isAllDay=True,
+                          start={"dateTime": "2026-08-10T00:00:00", "timeZone": "China Standard Time"},
+                          end={"dateTime": "2026-08-14T00:00:00", "timeZone": "China Standard Time"})
+        patches = []
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            if method == "GET":
+                return existing
+            patches.append(data)
+            return {**existing, **data}
+        _mock_net(monkeypatch, call_fn=fake)
+        monkeypatch.setattr(ev, "_mailbox_tz_name", lambda token: ("China Standard Time", True))
+        assert ev.cmd_update(self._args(**options)) == 0
+        assert patches[0]["start"]["dateTime"] == expected_start
+        assert patches[0]["end"]["dateTime"] == expected_end
+
+    @pytest.mark.parametrize("was_all_day", [True, False])
+    @pytest.mark.parametrize("bound", [None, "start", "end"])
+    def test_type_conversion_requires_both_explicit_bounds(self, monkeypatch, was_all_day, bound):
+        """Converting event types cannot guess any missing boundary or duration."""
+        existing = _event(isAllDay=was_all_day)
+        if was_all_day:
+            existing.update(start={"dateTime": "2026-08-10T00:00:00", "timeZone": "China Standard Time"},
+                            end={"dateTime": "2026-08-11T00:00:00", "timeZone": "China Standard Time"})
+        options = {"all_day": not was_all_day}
+        if bound:
+            options[bound] = "2026-08-10 09:00" if was_all_day else "2026-08-10"
+        methods = []
+        def fake(method, *args, **kwargs):
+            methods.append(method)
+            return existing
+        _mock_net(monkeypatch, call_fn=fake)
+        with pytest.raises(CalError):
+            ev.cmd_update(self._args(**options))
+        assert "PATCH" not in methods
+
+    def test_partial_all_day_update_rejects_start_after_preserved_end(self, monkeypatch):
+        """Preserving an existing end is not permission to silently move it forward."""
+        existing = _event(isAllDay=True,
+                          start={"dateTime": "2026-08-10T00:00:00", "timeZone": "China Standard Time"},
+                          end={"dateTime": "2026-08-12T00:00:00", "timeZone": "China Standard Time"})
+        methods = []
+        def fake(method, *args, **kwargs):
+            methods.append(method)
+            return existing
+        _mock_net(monkeypatch, call_fn=fake)
+        with pytest.raises(CalError):
+            ev.cmd_update(self._args(start="2026-08-12"))
+        assert "PATCH" not in methods
 
 
 class TestCmdNext:
@@ -819,7 +865,7 @@ class TestCmdRead:
         ev.cmd_read(_args(event_id="O1"))
         out = capsys.readouterr().out
         assert "🆕 系列主事件ID: M1" in out
-        assert "第 1 次出现" in out
+        assert "次出现" not in out  # Monthly numbering is omitted instead of estimating.
 
 
 class TestCmdList:
@@ -830,8 +876,9 @@ class TestCmdList:
 
     def _args(self, **kw):
         """构造 list 的参数，缺省字段补全。"""
-        base = dict(days=7, past=0, search=None, category=None, summary=False,
-                    from_date=None, created_after=None, reminders=False)
+        base = dict(days=7, search=None, category=None, summary=False,
+                    from_date=None if kw.get("created_after") else "2026-08-10",
+                    created_after=None, created_before=None, reminders=False)
         base.update(kw)
         return _args(**base)
 
@@ -872,6 +919,74 @@ class TestCmdList:
         monkeypatch.setattr(ev, "_get_all", fake_get_all)
         ev.cmd_list(self._args(created_after="2026-08-06", reminders=True))
         assert "isReminderOn" in seen["url"] and "reminderMinutesBeforeStart" in seen["url"]
+
+    @pytest.mark.parametrize("start, days, expected_end", [
+        ("2026-09-09", 1, "2026-09-10"),
+        ("2026-09-09", 7, "2026-09-16"),
+        ("2026-09-30", 1, "2026-10-01"),
+        ("2026-12-31", 2, "2027-01-02"),
+        ("2028-02-28", 2, "2028-03-01"),
+    ])
+    def test_exact_calendar_date_window(self, monkeypatch, start, days, expected_end):
+        """Query explicit dates with exclusive midnight, independently of today's date."""
+        class NoCurrentDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                pytest.fail("Explicit list bounds must not consult the current clock")
+
+        monkeypatch.setattr(ev, "datetime", NoCurrentDateTime)
+        urls = []
+        _mock_net(monkeypatch, get_all=lambda url, *a, **k: urls.append(url) or [])
+        assert ev.cmd_list(self._args(json=True, from_date=start, days=days)) == 0
+        query = parse_qs(urlparse(urls[0]).query)
+        assert query["startDateTime"] == [start + "T00:00:00+08:00"]
+        assert query["endDateTime"] == [expected_end + "T00:00:00+08:00"]
+
+    @pytest.mark.parametrize("options", [
+        {"from_date": None},
+        {"from_date": "2026-08-10", "created_after": "2026-08-01"},
+        {"created_before": "2026-08-20"},
+        {"from_date": "本周一"},
+        {"from_date": "2026-08-10 09:00"},
+        {"days": 0},
+        {"days": -1},
+        {"days": True},
+        {"days": 1.5},
+        {"from_date": "9999-12-31", "days": 1},
+        {"created_after": "2026-08-10", "created_before": "2026-08-10"},
+        {"created_after": "2026-08-10", "created_before": "2026-08-09"},
+        {"created_after": "本周一"},
+        {"created_after": "2026-08-10", "created_before": "明天"},
+    ])
+    def test_invalid_window_fails_before_authentication(self, monkeypatch, options):
+        monkeypatch.setattr(ev, "get_token", lambda: pytest.fail("Invalid query must not authenticate"))
+        with pytest.raises(CalError):
+            ev.cmd_list(self._args(**options))
+
+    def test_created_window_uses_exclusive_upper_bound_and_returns_creation_date(self, capsys, monkeypatch):
+        urls = []
+        event = _event(createdDateTime="2026-08-10T14:00:00Z")
+        _mock_net(monkeypatch, get_all=lambda url, *a, **k: urls.append(url) or [event])
+        assert ev.cmd_list(self._args(json=True, created_after="2026-08-10",
+                                     created_before="2026-08-11")) == 0
+        query = parse_qs(urlparse(urls[0]).query)
+        assert urlparse(urls[0]).path == "/me/events"
+        assert query["$filter"] == ["createdDateTime ge 2026-08-10T00:00:00+08:00 and "
+                                    "createdDateTime lt 2026-08-11T00:00:00+08:00"]
+        assert "createdDateTime" in query["$select"][0].split(",")
+        assert json.loads(capsys.readouterr().out)[0]["createdDateTime"] == event["createdDateTime"]
+
+    def test_calendar_date_window_preserves_dst_boundary(self, monkeypatch):
+        """A local calendar day can last 23 hours; preserve both midnight offsets."""
+        from zoneinfo import ZoneInfo
+
+        monkeypatch.setattr(ev, "LOCAL_TZ", ZoneInfo("America/New_York"))
+        urls = []
+        _mock_net(monkeypatch, get_all=lambda url, *a, **k: urls.append(url) or [])
+        assert ev.cmd_list(self._args(json=True, from_date="2026-03-08", days=1)) == 0
+        query = parse_qs(urlparse(urls[0]).query)
+        assert query["startDateTime"] == ["2026-03-08T00:00:00-05:00"]
+        assert query["endDateTime"] == ["2026-03-09T00:00:00-04:00"]
 
 
 class TestSearchTarget:
@@ -948,3 +1063,33 @@ class TestSearchTarget:
         with pytest.raises(CalError) as ei:
             ev.cmd_delete(self._args())
         assert "事件ID不能为空" in str(ei.value)
+
+
+@pytest.mark.parametrize("start, end, original_day", [
+    ("2026-03-08 02:30", "2026-03-08 03:30", "2026-03-07"),
+    ("2026-11-01 01:30", "2026-11-01 02:30", "2026-10-31"),
+])
+@pytest.mark.parametrize("command", ["update", "move"])
+def test_dst_invalid_or_ambiguous_write_rejected(monkeypatch, command, start, end, original_day):
+    """A valid original time cannot be moved/updated into a missing or repeated DST hour."""
+    from zoneinfo import ZoneInfo
+    import ocal_time
+
+    zone = ZoneInfo("America/New_York")
+    monkeypatch.setattr(ev, "LOCAL_TZ", zone)
+    monkeypatch.setattr(ev, "LOCAL_TZ_NAME", "America/New_York")
+    monkeypatch.setattr(ocal_time, "LOCAL_TZ", zone)
+    original = _event(start={"dateTime": original_day + "T" + start[11:] + ":00", "timeZone": "America/New_York"},
+                      end={"dateTime": original_day + "T" + end[11:] + ":00", "timeZone": "America/New_York"})
+    methods = []
+    def fake(method, *args, **kwargs):
+        methods.append(method)
+        return original
+    _mock_net(monkeypatch, call_fn=fake)
+    if command == "update":
+        args = TestCmdUpdate()._args(start=start, end=end)
+    else:
+        args = _args(event_id="E1", days=1, to=None, yes=True)
+    with pytest.raises(CalError):
+        getattr(ev, "cmd_" + command)(args)
+    assert "PATCH" not in methods

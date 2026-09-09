@@ -1,158 +1,138 @@
 # 命令参考
 
-本文档是 Outlook 日历助手（通过命令行管理 Outlook 日历的工具集）的完整命令参考。
-前置条件：已完成连接认证（见 `configuration.zh-CN.md`）；所有命令形如 `python outlook_cal.py <命令> [参数]`，在项目 `scripts/` 目录下运行。
+调用方式为 `python "<skill目录>/scripts/outlook_cal.py" <命令> [参数]`。下文使用项目根目录下的简写 `python scripts/outlook_cal.py`。只有日历命令要求登录，参见 [configuration.zh-CN.md](configuration.zh-CN.md)。
 
-## 目录
+## 共用参数与格式
 
-- [通用约定](#通用约定)
-- [1. 查看安排](#1-查看安排)（status / list / today / tomorrow / week / read / free / next）
-- [2. 添加日程：add](#2-添加日程add)
-- [3. 修改日程：update](#3-修改日程update)
-- [4. 移动日程：move](#4-移动日程move)
-- [5. 删除日程：delete](#5-删除日程delete)
-- [6. 机器可读输出：--json](#6-机器可读输出json)
+- `--json`、`--lang zh|en`、`--timezone "Area/City"` 可放在子命令前或后。未给 `--timezone` 时自动探测有效本地时区，包括 `TZ`。显式时区必须是有效 IANA 或现行 Windows 名称；无效名称报错，不静默回退 UTC。IANA 输入保留该地区自身的规则。
+- 日期严格为 `YYYY-MM-DD`；带时刻严格为 `YYYY-MM-DD HH:MM` 或 `YYYY-MM-DDTHH:MM`。所有数字字段补零，不接受秒、时区后缀、自然语言或多余空白。时区使用单独参数。
+- 模型负责理解自然语言；需要时获取新鲜 `context`，计算日期，写入与重试保留相同的绝对值和时区名称。2026 年 9 月的示例日期均为假设值。
+- 日程 ID 使用 JSON 的 `id` 和 `seriesMasterId`。人类输出也提供 🆔 和 🆕 锚点；stderr 中的冲突提示不是操作结果 ID。
+- `update`、`move`、`delete` 接受日程 ID 或 `--search "词"`。搜索范围为过去 7 天至未来 30 天；唯一匹配继续执行，无匹配或多匹配时报错并提示。需要其他范围或已经明确目标时，先用 `list` 查询，再传入返回的 ID。
+- `-y` 和 `--json` 跳过 CLI 确认；模型复用用户已对具体操作与范围给出的授权。
 
-## 通用约定
+## 本地工具
 
-- **时间格式**：时段用 `YYYY-MM-DD HH:MM`，如 `2026-08-10 09:00`；全天只用 `YYYY-MM-DD`。**也支持相对时间**：`今天`/`明天`/`后天`/`本周X`/`下周X`（可带时刻：`今天 14:00`、`今天下午2点`、`明天上午9点半`），按命令运行时的系统当前日期换算
-- **事件 ID**：须从命令输出的 🆔 行获取，不能凭空构造；`list` / `add` / `read` 均可获得
-- **--search 定位**：`update` / `delete` / `move` 不传事件 ID 时可用 `--search "词"` 按标题/地点/备注定位（唯一匹配直接操作；多匹配报错并列出候选 🆔；搜索窗口为过去 7 天 ~ 未来 30 天）
-- **确认**：`update` / `delete` / `move` 默认会询问一次确认，`-y` 可跳过；`--json` 时自动跳过
-- **语言**：默认按系统语言自动选择（中文系统 → 中文，其他 → 英文）；`--lang zh|en`（命令前后均可）或环境变量 `OCAL_LANG` 覆盖。`--json` 输出与 emoji 锚点语言无关
-- **首次运行**：自动安装缺失依赖（requests/msal/tzdata）；安装失败时会提示手动安装命令。`tzdata` 是 Windows 时区解析正确的关键，缺失可能导致时间偏移
-- **机器可读**：任意命令加 `--json` → stdout 只输出 JSON（用法见最后一节）
-
----
-
-## 1. 查看安排
-
-### status — 连接状态
-`status`：显示当前账户、登录有效期。
-
-### list — 查看一段时间的日程
-默认未来 7 天，按天分组显示（时间、标题、定期标记、类别、🆔）。
-
-| 参数 | 作用 |
-|------|------|
-| `--days N` | 查看未来 N 天（默认 7） |
-| `--past N` | 同时查看过去 N 天 |
-| `--from YYYY-MM-DD` | 从指定日期开始查看（此时忽略 `--past`） |
-| `--search "词"` | 按标题/地点/备注筛选 |
-| `--category "类别"` | 按类别筛选 |
-| `--created-after 日期` | 仅查看此后**添加**的日程（"我昨天加的"） |
-| `--reminders` | 仅查看设置了提醒的日程 |
-| `--summary` | 仅显示每天日程数量，不列出明细 |
+### context — 当前时钟与时区
 
 ```bash
-python outlook_cal.py list --days 30 --past 7 --category "工作"
-python outlook_cal.py list --from "2026-08-20" --days 5 --summary
-python outlook_cal.py list --created-after "2026-08-06" --search "会议"
+python scripts/outlook_cal.py context --timezone Asia/Shanghai --json
 ```
 
-### today / tomorrow / week — 快捷查看
-今天 / 明天 / 未来 7 天。均支持 `--search` / `--category` / `--summary`。
+返回对象含 `now`（带偏移的时间）、`today`（日期）、`timezone`（有效时区名称）、`utc_offset`、`weekday`（英文小写星期）、`week_start`（本周一日期）。不读取日历，不进行账户认证。相关步骤可以复用新鲜结果；时间流逝或时区改变影响相对日期含义时再刷新。
 
-### read — 日程详情
-`read <ID>`：完整信息（时间、地点、类别、重复规则、重要度、私密、备注、链接、添加时间、组织者）。若是定期日程的某一次，还会显示所属系列、第 N 次、系列主事件 ID。
+### date — 确定的自然日运算
 
-### free — 空闲时段
-`free [日期] [--from HH:MM] [--to HH:MM] [--days N]`（默认今天 09:00-18:00，1 天）。
-按"忙碌/空闲"状态判断：标记为"空闲"的日程不视为占用；全天日程占用整天。
+```bash
+python scripts/outlook_cal.py date --base 2026-09-07 --days 4 --json
+```
 
-### next — 定期日程的下次出现
-`next <ID>`：返回未来 365 天内的下一次出现；系列已结束时会有明确提示；非定期日程会报错。
+返回 `{"base":"2026-09-07","days":4,"date":"2026-09-11"}`。`--base` 和有符号整数 `--days` 必填，允许零和负值。不读取时钟，不访问日历；非法日期或计算越界时报错。
 
----
+明天用 `context.today` 加 1 天，本周五用 `context.week_start` 加 4 天，下周一加 7 天。复杂月/年运算可用 Python `datetime`/`calendar`，同样传入明确基准日期。
 
-## 2. 添加日程：add
+## 读取命令
 
-`add <标题> <开始> [结束]` —— 省略结束时间时，默认开始后 1 小时。
+### status
 
-| 参数 | 作用 |
-|------|------|
-| `--all-day` | 全天（开始只给日期） |
-| `-l "地点"` | 地点 |
-| `-b "备注"` | 备注 |
-| `--category "工作,重要"` | 类别（逗号分隔多个） |
-| `--remind N` | 提醒：全天 = 提前 N **天**；时段 = 提前 N **分钟** |
-| `--repeat "规则"` | 定期（语法见 recurring-events.zh-CN.md） |
-| `--repeat-until 日期` / `--repeat-times N` | 定期结束条件（需配合 `--repeat`） |
-| `--importance 低/普通/高` | 重要度 |
-| `--private` | 私密 |
-| `--busy busy/free/tentative/oof/workingElsewhere` | 忙闲显示 |
+`status` 报告连接状态与账户信息。与 `context` 不同，它会检查账户配置。
+
+### list
+
+选择一种查询依据：
+
+- `list --from YYYY-MM-DD [--days N]`：覆盖 N 个自然日，默认 7 天，N 必须为正数。从有效时区当日零点到最后一天的次日零点，不含结束边界。跨夏令时边界时分别计算两端偏移。
+- `list --created-after YYYY-MM-DD [--created-before YYYY-MM-DD]`：按创建时间筛选，大于等于前一个日期的本地零点，并可选地小于后一个日期的零点。上界日期必须更晚。筛选的是创建时间，不是发生时间。`--created-before` 必须配合 `--created-after`，创建筛选不能与 `--from` 合用。
+
+`--search "词"` 筛选标题/地点/备注，`--category "类别"` 筛选类别，`--reminders` 只看开启提醒的日程。`--summary` 按返回日程的开始日期计数，跨多天的日程只计一次；需要标题和时间时不加该选项。JSON 模式返回日期到数量的对象，如 `{"2026-09-11":2}`，无匹配时为 `{}`。创建日期筛选结果还包含 `createdDateTime`。
+
+```bash
+python scripts/outlook_cal.py list --from 2026-09-09 --days 7 --timezone Asia/Shanghai --json
+python scripts/outlook_cal.py list --from 2026-09-07 --days 7 --search "会议" --timezone Asia/Shanghai --json
+python scripts/outlook_cal.py list --created-after 2026-09-08 --created-before 2026-09-09 --timezone Asia/Shanghai --json
+```
+
+已移除 `today`、`tomorrow`、`week` 命令及 `--past`。先确定实际日期范围，再调用 `list --from`。
+
+### read 与 next
+
+`read <ID>` 返回完整详情，包括创建时间、组织者、提醒、重复规则和适用时的系列主 ID。`next <ID>` 查找未来 365 天内定期日程的下次出现；系列已结束和非定期日程有各自的结果。
+
+### free
+
+`free YYYY-MM-DD [--from HH:MM] [--to HH:MM] [--days N]` 必须给出日期。时段默认 09:00–18:00，N 默认 1；模型应明确传入用户要求的起止时刻。N 为正数，每日结束晚于开始，`HH:MM` 必须补零。标记为空闲或已取消的日程不占用时间，忙碌的全天日程占满当天。若每日窗口端点不存在/有歧义，或窗口内 UTC 偏移发生变化，则拒绝查询。先明确实际 UTC 起止，再用 `--timezone UTC` 查询；纯 `HH:MM` 输出无法区分重复出现的本地时刻。
+
+```bash
+python scripts/outlook_cal.py free 2026-09-11 --from 14:00 --to 17:00 --timezone Asia/Shanghai --json
+```
+
+## add — 创建日程
+
+时段日程：`add <标题> "YYYY-MM-DD HH:MM" "YYYY-MM-DD HH:MM"`。开始和结束都必填，结束必须晚于开始。只给日期却不加 `--all-day` 会报错。
+
+全天日程：`add <标题> YYYY-MM-DD [YYYY-MM-DD] --all-day`。可选结束日期为包含当天的上界，省略时创建单天日程。后端转换为 Graph 不包含的次日零点。全天写入使用邮箱时区，不可用时使用有效时区。
+
+| 参数 | 含义 |
+|---|---|
+| `-l` / `--location`、`-b` / `--body` | 地点、备注 |
+| `--category "工作,重要"` | 逗号分隔的类别 |
+| `--remind N` | 时段日程提前 N 分钟，全天日程提前 N 天 |
+| `--repeat-file <路径>` 或 `--repeat '<JSON>'` | 经校验的 Graph recurrence pattern，二选一 |
+| `--repeat-until YYYY-MM-DD` 或 `--repeat-times N` | 结束条件，二选一，需同时给出规则 |
+| `--importance low\|normal\|high`、`--private` | 重要性、隐私 |
+| `--busy free\|tentative\|busy\|oof\|workingElsewhere` | 空闲/忙碌状态 |
 | `--force` | 跳过冲突检查 |
 
-注意：
-- 仅给出日期而未给时间时，自动按全天处理（会提示）
-- 全天日程可给定第二个日期参数表示多天（`add "旅行" "2026-08-10" "2026-08-12" --all-day`）
-- 默认检查与现有日程的重叠情况，仅警告不阻断；`--force` 可跳过
+重叠会警告，不阻断创建。非法、不存在或因夏令时而有歧义的墙钟时间会被拒绝。遇到重复的本地时刻，先确定实际时刻，再使用明确的 UTC 起止值及 `--timezone UTC`。不会根据省略的时长猜测结束时间。
 
 ```bash
-python outlook_cal.py add "周会" "2026-08-10 09:00" "2026-08-10 10:00" -l "3号会议室" -b "讨论Q3" --category "工作" --remind 10
-python outlook_cal.py add "生日" "2026-08-15" --all-day
-python outlook_cal.py add "旅行" "2026-08-10" "2026-08-12" --all-day
-python outlook_cal.py add "站会" "2026-08-14 10:00" "2026-08-14 10:30" --repeat "每周五" --repeat-times 5
+python scripts/outlook_cal.py add "计划讨论" "2026-09-11 15:00" "2026-09-11 15:30" --remind 10 --timezone Asia/Shanghai --json
+python scripts/outlook_cal.py add "旅行" 2026-09-11 2026-09-13 --all-day --timezone Asia/Shanghai --json
 ```
 
----
+## update — 修改指定字段
 
-## 3. 修改日程：update
+`update <ID> [参数]` 保留未指定字段。可修改：`--subject`、`--start`、`--end`、`-l`/`--location`、`-b`/`--body`、`--category`、`--importance`、`--private`/`--no-private`、`--busy`、`--remind`/`--no-remind`，以及 `add` 的重复规则选项。
 
-`update [<ID>] [参数]` —— 仅修改给定的字段，其余不变；不传 ID 时可用 `--search` 定位目标。
-
-| 参数 | 作用 |
-|------|------|
-| `--search "词"` | 不传事件 ID 时按关键词定位（唯一匹配直接操作；多匹配报错列出候选） |
-| `--subject "新标题"` | 修改标题（`""` 表示清空） |
-| `--start` / `--end` | 修改时间（全天给日期，时段给 `日期 时间`） |
-| `--all-day` / `--no-all-day` | 全天 ↔ 时段互转 |
-| `-l` / `-b` | 地点 / 备注（`""` 表示清空） |
-| `--category` | 类别（`""` 表示清空） |
-| `--importance` / `--private`/`--no-private` / `--busy` | 重要度 / 私密 / 忙闲 |
-| `--remind N` / `--no-remind` | 设置提醒 / 关闭提醒 |
-| `--repeat "规则"` / `--repeat ""` | 设置定期 / 解除定期（转为单次） |
-| `--repeat-until` / `--repeat-times` | 定期结束条件（需配合 `--repeat`） |
-| `-y` | 跳过确认 |
-
-注意：
-- 转为时段未给 `--end` 时，默认开始后 1 小时
-- 全天日程同时给定 `--start` 与 `--end` 两个日期，可改为多天区间
-- 对定期日程"某一次"的修改仅影响该次；修改整个系列的规则须操作主事件（见 recurring-events.zh-CN.md）
-
----
-
-## 4. 移动日程：move
-
-`move [<ID>] --days N` 或 `move [<ID>] --to YYYY-MM-DD`（二选一）；不传 ID 时可用 `--search` 定位目标。
-
-- **保留原来的时间段和时长**，只改日期（全天日程同理）
-- `--days` 可为负数（向前移动）
+- 空字符串可清空标题、地点、备注、类别，`--no-remind` 关闭提醒。
+- 日程类型不变时，可只修改开始或结束，最终时间范围仍须有效。
+- 使用 `--all-day`/`--no-all-day` 在全天与时段之间转换时，必须明确给出新类型格式的 **`--start` 和 `--end`**。全天结束日期仍包含当天；类型转换不猜测开始或结束。
+- 只有显式 `--repeat ''` 才移除重复规则；空规则文件或只有空白的文件会报错。设置规则传 pattern 对象或文件。单次/系列范围及结束条件见 [recurring-events.zh-CN.md](recurring-events.zh-CN.md)。
+- 没有修改字段时返回错误，不发送 PATCH。
 
 ```bash
-python outlook_cal.py move <ID> --days 3          # 整体往后 3 天
-python outlook_cal.py move <ID> --to "2026-08-20" # 挪到 8 月 20 日
-python outlook_cal.py move --search "站会" --to "2026-08-20"  # 按标题定位后移动
+python scripts/outlook_cal.py update <ID> --no-all-day --start "2026-09-11 09:00" --end "2026-09-11 10:00" --timezone Asia/Shanghai --json
 ```
 
----
+重复规则使用文件可避开不同 shell 的引号转义。保存 UTF-8 文件 `weekly.json`，内容只有以下 pattern 对象：
 
-## 5. 删除日程：delete
+```json
+{"type":"weekly","interval":1,"daysOfWeek":["wednesday"],"firstDayOfWeek":"monday"}
+```
 
-`delete [<ID>] [-y] [--series]`；不传 ID 时可用 `--search` 定位目标。
+然后在已授权范围内，按用户要求的结束条件执行系列修改：
 
-| 参数 | 作用 |
-|------|------|
-| （无） | 默认先确认；若目标为定期日程的某一次，会询问"仅删本次 [1] / 删整个系列 [2]" |
-| `--search "词"` | 不传事件 ID 时按关键词定位（唯一匹配直接操作；多匹配报错列出候选） |
-| `-y` | 跳过确认；定期日程默认**只删本次** |
-| `--series` | 删除整个定期系列 |
+```bash
+python scripts/outlook_cal.py update <主ID> --repeat-file weekly.json --repeat-times 8 --timezone Asia/Shanghai --json
+```
 
----
+## move 与 delete
 
-## 6. 机器可读输出：--json
+`move <ID> --to YYYY-MM-DD` 或 `move <ID> --days N` 必须二选一。有符号的 `--days` 平移发生日期，`--to` 指定实际目的日期。两者保留原时段与时长，包括全天跨度。不能根据创建日期推断移动天数。
 
-任意命令前或后加 `--json`：
-- stdout 只有 JSON，人类提示走 stderr
-- list → 日程数组；add/read/update → 日程对象；delete → `{"deleted", "subject", "series"}`；free → 按天结构；出错 → `{"error", "exit": 1}`
-- update/delete/move 的确认流程自动跳过
+`delete <ID> [-y] [--series]` 删除目标日程。目标为单次出现时，`-y`/`--json` 默认只删除该次，`--series` 删除整个系列；交互模式可选择删除范围。从对话确认实际目标与范围。
+
+## JSON 契约
+
+`--json` 操作模式下 stdout 严格为一个 JSON 值，人类诊断信息走 stderr；`--help` 仍为文本。JSON 使用 ASCII 转义保护 Windows 窄编码管道中的 Unicode，先解析再读取字段。
+
+| 命令 | 结果 |
+|---|---|
+| `context` | 上述时钟/时区对象 |
+| `date` | `{base, days, date}` |
+| `list` | 日程数组，`--summary` 时为每日数量 |
+| `add`、`read`、`update`、`move` | 日程对象 |
+| `delete` | 包含 `deleted`、`subject`、`series` 的对象 |
+| `free` | 按天组织的空闲结构 |
+| 操作/参数错误 | `{"error": ..., "exit": 1}`，非零退出 |
+| 未连接的 `status` | 含 `connected: false` 的连接状态对象 |

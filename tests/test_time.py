@@ -16,7 +16,7 @@ from ocal_errors import CalError
 from ocal_time import (
     _parse_dt_arg, _all_day_range, _normalize_dt, _parse_dt,
     _resolve_tz, _fmt, _weekday, _mk_tz, _tz_from_env, _tz_from_offset,
-    _local_time_exists, _POSIX_TZ,
+    _local_time_exists, _POSIX_TZ, resolve_timezone,
 )
 
 
@@ -41,149 +41,64 @@ class TestLocalTimeExists:
                                   self._ZI("America/New_York")) is True
 
 
-class TestRelativeDate:
-    """相对时间参数解析（今天/明天/本周X/中文时刻…）。
-
-    换算基准是"运行时刻的系统时钟"（now 可注入）："今天"这类词由命令解析
-    而不是 agent 凭上下文推算——这正是"创建到昨天"事故的根治点。
-    """
-
-    NOW = datetime(2026, 8, 14)  # 周五
-
-    @pytest.mark.parametrize("s,expect", [
-        ("今天", datetime(2026, 8, 14)),
-        ("今日", datetime(2026, 8, 14)),
-        ("明天", datetime(2026, 8, 15)),
-        ("明日", datetime(2026, 8, 15)),
-        ("后天", datetime(2026, 8, 16)),
-        ("today", datetime(2026, 8, 14)),
-        ("tomorrow", datetime(2026, 8, 15)),
-        ("day after tomorrow", datetime(2026, 8, 16)),
-    ])
-    def test_basic(self, s, expect):
-        """纯日期相对词按基准日换算。"""
-        assert _parse_dt_arg(s, now=self.NOW) == expect
-
-    @pytest.mark.parametrize("s,expect", [
-        ("今天 14:00", datetime(2026, 8, 14, 14, 0)),
-        ("明天 9:00", datetime(2026, 8, 15, 9, 0)),
-        ("今天下午2点", datetime(2026, 8, 14, 14, 0)),
-        ("今天下午2点半", datetime(2026, 8, 14, 14, 30)),
-        ("明天上午9点半", datetime(2026, 8, 15, 9, 30)),
-        ("今天中午12点", datetime(2026, 8, 14, 12, 0)),
-        ("今天晚上8点", datetime(2026, 8, 14, 20, 0)),
-        ("后天凌晨1点", datetime(2026, 8, 16, 1, 0)),
-    ])
-    def test_with_time(self, s, expect):
-        """相对日期 + 时刻（24 小时制或中文"X点/X点半"）。"""
-        assert _parse_dt_arg(s, now=self.NOW) == expect
-
-    def test_weekday_this(self):
-        """本周X 按周一起始：NOW=周五时本周五=今天。"""
-        assert _parse_dt_arg("本周五", now=self.NOW) == datetime(2026, 8, 14)
-        assert _parse_dt_arg("本周一", now=self.NOW) == datetime(2026, 8, 10)
-        assert _parse_dt_arg("本周日", now=self.NOW) == datetime(2026, 8, 16)
-        assert _parse_dt_arg("这周五", now=self.NOW) == datetime(2026, 8, 14)
-        assert _parse_dt_arg("本周五 14:00", now=self.NOW) == datetime(2026, 8, 14, 14, 0)
-        assert _parse_dt_arg("this friday", now=self.NOW) == datetime(2026, 8, 14)
-
-    def test_weekday_next(self):
-        """下周X = 下周的对应星期。"""
-        assert _parse_dt_arg("下周三", now=self.NOW) == datetime(2026, 8, 19)
-        assert _parse_dt_arg("下周周一", now=self.NOW) == datetime(2026, 8, 17)
-        assert _parse_dt_arg("下周一 09:00", now=self.NOW) == datetime(2026, 8, 17, 9, 0)
-        assert _parse_dt_arg("next friday", now=self.NOW) == datetime(2026, 8, 21)
-
-    def test_monday_basis(self):
-        """基准日是周一时：本周五=同一周的周五，下周五=下一周。"""
-        monday = datetime(2026, 8, 10)
-        assert _parse_dt_arg("本周五", now=monday) == datetime(2026, 8, 14)
-        assert _parse_dt_arg("下周五", now=monday) == datetime(2026, 8, 21)
-
-    def test_date_only_relative(self):
-        """date_only 模式：相对词可用，但带时刻的相对词要拒绝。"""
-        assert _parse_dt_arg("今天", now=self.NOW, date_only=True) == datetime(2026, 8, 14)
-        assert _parse_dt_arg("本周五", now=self.NOW, date_only=True) == datetime(2026, 8, 14)
-        with pytest.raises(CalError):
-            _parse_dt_arg("今天 14:00", now=self.NOW, date_only=True)
-        with pytest.raises(CalError):
-            _parse_dt_arg("今天下午2点", now=self.NOW, date_only=True)
-
-    @pytest.mark.parametrize("bad", [
-        "今天abc", "本周", "周三", "下周三下午", "下午2点", "今天 25:00",
-    ])
-    def test_garbage_raises(self, bad):
-        """不完整/歧义/超界的相对表达必须报错，不能瞎猜。"""
-        with pytest.raises(CalError):
-            _parse_dt_arg(bad, now=self.NOW)
-
-
 class TestParseDtArg:
-    """命令行时间参数解析 _parse_dt_arg。
+    """CLI 只接受补零的明确日期时间，绝不从时钟猜测或补全。"""
 
-    add/update 的开始结束时间、list/free 的日期都从它进。解析策略是：
-    格式宽松（小时/月份不补零、日期缺位都收下），非法值统一抛 CalError，
-    由上层转成 ❌ 开头的友好提示而不是 traceback。
-    """
-
-    def test_date_only(self):
-        """纯日期参数，date_only=True 只认 YYYY-MM-DD。
-
-        全天日程的开始时间就走这条路径，解析结果精确到日即可。
-        """
-        assert _parse_dt_arg("2026-08-10", date_only=True) == datetime(2026, 8, 10)
-
-    def test_datetime_slot(self):
-        """日期加时间的参数，时段日程的标准写法。
-
-        YYYY-MM-DD HH:MM 精确到分钟，add 的时段日程、update 改时间都用它。
-        """
-        assert _parse_dt_arg("2026-08-10 09:30") == datetime(2026, 8, 10, 9, 30)
-
-    def test_hour_without_padding(self):
-        """小时不补零也要能解析。
-
-        用户习惯写 9:00 而不是 09:00，两种写法必须等价，不能因为这个报错。
-        """
-        assert _parse_dt_arg("2026-08-17 9:00") == datetime(2026, 8, 17, 9, 0)
-
-    def test_month_without_padding(self):
-        """月份不补零也要能解析，2026-8-17 等价于 2026-08-17。"""
-        assert _parse_dt_arg("2026-8-17 09:00") == datetime(2026, 8, 17, 9, 0)
-
-    def test_single_digit_day_accepted(self):
-        """日期缺位（2026-08-1）按宽松处理接受。
-
-        这是有意的宽松，而不是遗漏：date_only 场景只取前 10 位，
-        缺位日期在 strptime 里天然合法。
-        """
-        assert _parse_dt_arg("2026-08-1").date() == datetime(2026, 8, 1).date()
-
-    @pytest.mark.parametrize("bad", [
-        "",                       # 空
-        "2026-13-01",             # 13 月
-        "2026-02-30",             # 2 月 30 日
-        "2026-08-17 24:00",       # 24 点
-        "2026-08-17 09:60",       # 60 分
-        "2026/08/10",             # 斜杠格式
-        "下周三下午",              # 自然语言
+    @pytest.mark.parametrize("value,expected", [
+        ("2026-08-10", datetime(2026, 8, 10)),
+        ("2024-02-29", datetime(2024, 2, 29)),
+        ("0001-01-01", datetime(1, 1, 1)),
+        ("9999-12-31", datetime(9999, 12, 31)),
+        ("2026-08-10 09:30", datetime(2026, 8, 10, 9, 30)),
+        ("2026-08-10T09:30", datetime(2026, 8, 10, 9, 30)),
+        ("2026-08-10 00:00", datetime(2026, 8, 10)),
+        ("2026-08-10T23:59", datetime(2026, 8, 10, 23, 59)),
     ])
-    def test_invalid_formats_raise(self, bad):
-        """各种非法格式都必须抛 CalError。
+    def test_canonical_formats(self, value, expected):
+        result = _parse_dt_arg(value)
+        assert result == expected
+        assert result.tzinfo is None
 
-        覆盖空串、越界的月/日、越界的时/分、错误分隔符、自然语言表达。
-        这些是用户在命令行最常见的错误输入，报错文案由语言表提供。
-        """
+    @pytest.mark.parametrize("value", ["2026-08-10", "2024-02-29"])
+    def test_date_only(self, value):
+        assert _parse_dt_arg(value, date_only=True) == datetime.fromisoformat(value)
+
+    @pytest.mark.parametrize("value", [
+        "今天", "今日", "昨天", "明天", "后天", "本周五", "这周五", "下周三",
+        "今天 14:00", "明天 9:00", "今天下午2点", "明天上午9点半",
+        "今天中午1点", "今天上午13点", "今天晚上12点", "下个月15号",
+        "today", "tomorrow", "day after tomorrow", "this friday", "next friday",
+        "next friday 14:00",
+    ])
+    @pytest.mark.parametrize("date_only", [False, True])
+    def test_natural_language_rejected(self, value, date_only):
         with pytest.raises(CalError):
-            _parse_dt_arg(bad)
+            _parse_dt_arg(value, date_only=date_only)
 
-    def test_date_only_rejects_time(self):
-        """date_only 模式拒绝带时间的输入。
-
-        全天日程的日期参数不该混入时刻，混了说明用户搞混了参数语义，要提示。
-        """
+    @pytest.mark.parametrize("value", [
+        "", None, 123,
+        "0000-01-01", "2026-13-01", "2026-02-29", "2026-02-30", "2026-04-31",
+        "2026-08-17 24:00", "2026-08-17 09:60",
+        "2026-8-17", "2026-08-1", "2026-08-17 9:00", "2026-08-17 09:0",
+        "2026/08/10", "20260810", "2026-08", "08-10", "2026-W33-1",
+        " 2026-08-10", "2026-08-10 ", "2026-08-10\n",
+        "2026-08-10  09:00", "2026-08-10\t09:00", "2026-08-10t09:00",
+        "２０２６-０８-１０", "2026-08-10 ０９:３０",
+        "2026-08-10T09:00:00", "2026-08-10 09:00:00.000",
+        "2026-08-10Z", "2026-08-10T09:00Z", "2026-08-10T09:00+08:00",
+        "2026-08-10 09:00 Asia/Shanghai",
+    ])
+    def test_invalid_formats_raise(self, value):
         with pytest.raises(CalError):
-            _parse_dt_arg("2026-08-10 09:00", date_only=True)
+            _parse_dt_arg(value)
+
+    @pytest.mark.parametrize("value", [
+        "2026-08-10 00:00", "2026-08-10T00:00", "2026-08-10 09:00",
+        "2026-8-10", "2026-08-1", "2026-08-10Z",
+    ])
+    def test_date_only_rejects_non_dates(self, value):
+        with pytest.raises(CalError):
+            _parse_dt_arg(value, date_only=True)
 
 
 class TestAllDayRange:
@@ -250,7 +165,7 @@ class TestMkTz:
     """探测到的时区名 → (tzinfo, Graph 名) _mk_tz。
 
     全量 CLDR 映射后的抽查：官方 Windows 名解析成正确 IANA 时区，
-    传给 Graph 的名字优先用 Windows 官方名；解析不了的返回 None。
+    IANA 输入保留地区规则；解析不了的返回 None。
     """
 
     def test_windows_name_roundtrip(self):
@@ -259,16 +174,75 @@ class TestMkTz:
         assert gname == "US Mountain Standard Time"
         assert zi.key == "America/Phoenix"  # 亚利桑那：UTC-7 无夏令时
 
-    def test_iana_name_maps_to_windows(self):
-        """IANA 名传给 Graph 时反查成 Windows 官方名。"""
+    def test_iana_name_is_preserved(self):
+        """IANA 名必须保留，避免多对一 Windows 映射改变地区规则。"""
         zi, gname = _mk_tz("Asia/Hong_Kong")
-        assert gname == "China Standard Time"
+        assert gname == "Asia/Hong_Kong"
         assert zi == _resolve_tz("Asia/Hong_Kong")
 
     def test_unknown_returns_none(self):
         """解析不了返回 None，交给探测链的下一级。"""
         assert _mk_tz("Mars/Phobos") is None
         assert _mk_tz("") is None
+
+
+class TestExplicitTimezone:
+    """显式输入的时区必须有效，不能警告后静默回退或改变地区规则。"""
+
+    @pytest.mark.parametrize("name,iana", [
+        ("China Standard Time", "Asia/Shanghai"),
+        ("Eastern Standard Time", "America/New_York"),
+        ("UTC", None),
+        ("GMT", None),
+        ("Etc/UTC", None),
+        ("Etc/GMT", None),
+        ("Asia/Shanghai", "Asia/Shanghai"),
+        ("Asia/Urumqi", "Asia/Urumqi"),
+        ("America/New_York", "America/New_York"),
+    ])
+    def test_named_timezones(self, name, iana):
+        graph_name, tz = resolve_timezone(name)
+        assert graph_name == name
+        assert getattr(tz, "key", None) == iana
+
+    def test_iana_region_is_not_replaced_with_different_windows_rules(self):
+        graph_name, tz = resolve_timezone("Asia/Urumqi")
+        assert graph_name == "Asia/Urumqi"
+        assert datetime(2026, 8, 10, tzinfo=tz).utcoffset().total_seconds() == 6 * 3600
+
+    @pytest.mark.parametrize("name", [
+        "", None, 123, "Mars/Phobos", "UTC+8", "CST-8", "Z",
+        " Asia/Shanghai", "Asia/Shanghai ", "../Asia/Shanghai", "/Asia/Shanghai",
+    ])
+    def test_invalid_timezone_fails_without_warning_or_fallback(self, name, capsys):
+        with pytest.raises(CalError):
+            resolve_timezone(name)
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""
+
+    def test_missing_timezone_database_fails(self, monkeypatch):
+        monkeypatch.setattr("ocal_time.ZoneInfo", None)
+        with pytest.raises(CalError):
+            resolve_timezone("China Standard Time")
+
+    @pytest.mark.parametrize("name", ["UTC", "GMT", "Etc/UTC", "Etc/GMT"])
+    @pytest.mark.parametrize("has_zoneinfo", [True, False])
+    def test_fixed_utc_names_need_no_timezone_database(self, monkeypatch, name, has_zoneinfo):
+        def missing_database(key):
+            pytest.fail("UTC must not query an external timezone database")
+
+        monkeypatch.setattr("ocal_time.ZoneInfo", missing_database if has_zoneinfo else None)
+        graph_name, tz = resolve_timezone(name)
+        assert graph_name == name
+        for month in (1, 7):
+            assert datetime(2026, month, 15, tzinfo=tz).utcoffset().total_seconds() == 0
+
+    def test_resolution_does_not_change_module_timezone(self):
+        import ocal_time
+        original = ocal_time.LOCAL_TZ, ocal_time.LOCAL_TZ_NAME
+        resolve_timezone("America/New_York")
+        assert (ocal_time.LOCAL_TZ, ocal_time.LOCAL_TZ_NAME) == original
 
 
 class TestTzFromEnv:
@@ -278,7 +252,7 @@ class TestTzFromEnv:
         """TZ=IANA 名直接可用。"""
         monkeypatch.setenv("TZ", "Asia/Shanghai")
         zi, gname = _tz_from_env()
-        assert gname == "China Standard Time"
+        assert gname == "Asia/Shanghai"
         assert zi == _resolve_tz("Asia/Shanghai")
 
     def test_utc_variants(self, monkeypatch):
@@ -298,25 +272,50 @@ class TestTzFromEnv:
         monkeypatch.setenv("TZ", v)
         assert _tz_from_env() is _POSIX_TZ
 
-    @pytest.mark.parametrize("v,win", [
-        ("EST5EDT", "Eastern Standard Time"),
-        ("CST6CDT", "Central Standard Time"),
-        ("Hongkong", "China Standard Time"),
-    ])
-    def test_legacy_alias_maps_to_windows(self, monkeypatch, v, win):
-        """tzdata 旧别名（backward 链接）反查成对应 Windows 官方名。
-
-        注意：个别链接（如 JST-9）不在 PyPI tzdata 包内，那些值会走
-        哨兵 → 偏移兜底路径，同样得到正确结果（日本无夏令时）。
-        """
-        monkeypatch.setenv("TZ", v)
+    @pytest.mark.parametrize("value", ["EST5EDT", "CST6CDT", "Hongkong"])
+    def test_legacy_iana_alias_is_preserved(self, monkeypatch, value):
+        """An available tzdata backward link retains its exact timezone rules."""
+        monkeypatch.setenv("TZ", value)
         zi, gname = _tz_from_env()
-        assert gname == win
+        assert gname == value
+        assert zi == _resolve_tz(value)
 
     def test_unset(self, monkeypatch):
         """没设 TZ 返回 None，交给下一级探测。"""
         monkeypatch.delenv("TZ", raising=False)
         assert _tz_from_env() is None
+
+    @pytest.mark.parametrize("name, winter_hours, summer_hours", [
+        ("Asia/Urumqi", 6, 6),
+        ("America/New_York", -5, -4),
+        ("America/Chihuahua", -6, -6),
+        ("Australia/Lord_Howe", 11, 10.5),
+        ("China Standard Time", 8, 8),
+        ("Eastern Standard Time", -5, -4),
+    ])
+    def test_context_timezone_roundtrip_preserves_offset_and_dst(self, monkeypatch, capsys,
+                                                               name, winter_hours, summer_hours):
+        """Reusing the timezone reported by context must not change dates or DST rules."""
+        import json
+        from types import SimpleNamespace
+        import ocal_time
+        import ocal_context
+
+        monkeypatch.setenv("TZ", name)
+        detected_tz, detected_name = ocal_time._detect_local_tz()
+        monkeypatch.setattr(ocal_time, "LOCAL_TZ", detected_tz)
+        monkeypatch.setattr(ocal_time, "LOCAL_TZ_NAME", detected_name)
+        assert ocal_context.cmd_context(SimpleNamespace(json=True)) == 0
+        context = json.loads(capsys.readouterr().out)
+        reused_name, reused_tz = resolve_timezone(context["timezone"])
+        assert detected_name == reused_name == name
+        for month, expected_hours in ((1, winter_hours), (7, summer_hours)):
+            instant = datetime(2026, month, 15, 12)
+            detected = instant.replace(tzinfo=detected_tz)
+            reused = instant.replace(tzinfo=reused_tz)
+            assert detected.isoformat() == reused.isoformat()
+            assert detected.utcoffset().total_seconds() == expected_hours * 3600
+            assert detected.dst() == reused.dst()
 
 
 class TestTzFromOffset:
@@ -422,6 +421,23 @@ class TestResolveTz:
         tz = _resolve_tz("Mars/Phobos")
         assert tz == timezone.utc
         assert "Mars/Phobos" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("posix", [False, True])
+def test_final_fallback_clock_agrees_with_utc_name(monkeypatch, capsys, posix):
+    import ocal_time
+    from types import SimpleNamespace
+    from datetime import timedelta
+    local = timezone(timedelta(hours=5, minutes=30))
+    monkeypatch.setattr(ocal_time, "datetime", SimpleNamespace(now=lambda: SimpleNamespace(
+        astimezone=lambda: SimpleNamespace(tzinfo=local))))
+    monkeypatch.setattr(ocal_time, "_tz_from_env", lambda: _POSIX_TZ if posix else None)
+    for name in ("_tz_from_winreg", "_tz_from_system_tzinfo", "_tz_from_etc_timezone",
+                 "_tz_from_localtime_link", "_tz_from_localtime_content", "_tz_from_offset"):
+        monkeypatch.setattr(ocal_time, name, lambda: None)
+    tzinfo, name = ocal_time._detect_local_tz()
+    assert name == "UTC" and tzinfo == timezone.utc
+    assert capsys.readouterr().err
 
 
 class TestParseDt:

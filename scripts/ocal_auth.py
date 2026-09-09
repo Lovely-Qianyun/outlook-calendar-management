@@ -5,7 +5,9 @@ import os, json, time
 from ocal_errors import CalError
 from ocal_i18n import t
 
-TOKEN_PATH = os.path.expanduser("~/.outlook_cal_token.json")
+# An explicit credential file isolates test/account sessions from the default login.
+TOKEN_PATH = os.path.abspath(os.path.expanduser(
+    os.environ.get("OCAL_TOKEN_PATH", "~/.outlook_cal_token.json")))
 
 # 权限清单：日历读写 + 邮箱设置读取（全天日程按邮箱首选时区写入用）。
 # Azure 应用注册侧另有 User.Read（设备码登录的基础权限，返回登录用户身份）；

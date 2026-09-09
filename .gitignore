@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 
 .outlook_cal_token.json
+.local-calendar-test/
 .env
 
 .claude/

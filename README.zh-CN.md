@@ -1,66 +1,54 @@
 🌐 [English](README.md) | 中文
 
+<p align="center">
+  <img src="./icon/appIcon.png" alt="App Logo" width="20%">
+</p>
+
 # Outlook 日历助手
 
-*对话式管理 Outlook 日历的 AI 技能：日程增删改移、定期重复、空闲查询——纯本地、官方 Graph API、无需 MCP。*
+通过与 AI 助手对话管理 Outlook 日历。模型负责理解请求，本地 Python CLI 校验明确参数并调用 Microsoft Graph。支持个人 outlook.com 和 Microsoft 365 账户、定期日程、提醒、空闲查询以及中英文输出，无需 MCP 服务或后台常驻进程。
 
-让 AI 助手用对话直接管理你的 Outlook 日历：查看、添加、修改、移动、删除日程，处理定期重复会议，一键查询空闲时段，一句话就能说完。纯本地 Python 工具，走微软官方 Graph API（个人 outlook.com / 微软 365 账户），设备码登录一次后自动续期，无需外部 MCP 服务、无后台常驻进程。自动适配时区，支持"下周二下午 3 点"这类相对时间，中英双语输出。
-
-## 特性
-
-- 全量日程操作：查看、按标题/地点/类别查找、添加、修改、移动、删除
-- 定期日程：创建、修改单次、修改整系列规则、删除整系列、查询下次出现
-- 空闲时段查询：询问"周五下午几点有空"即可直接获得答案
-- 中英双语输出，按系统语言自动选择，`--lang zh|en` 或环境变量 `OCAL_LANG` 覆盖
-- 首次运行自动安装依赖（含时区数据 `tzdata`，确保 Windows 上时间解析正确），无需手动安装
-- 相对时间直接可用：`今天`/`明天`/`本周五`/`今天下午2点` 等自动按系统当前日期换算
-- 机器可读：任意命令追加 `--json` 参数，即可获得纯净的 JSON 数据，便于其他程序直接使用
-- 结果稳定可解析：事件 ID 以 🆔 固定标记（见"工作原理"），AI 与脚本总能可靠地定位事件
+**3.0.0** 将语言理解与执行分开：CLI 只接受绝对日期和结构化重复规则。本地 `context`、`date` 工具提供当前时钟/时区和确定的日期运算，让模型在写入前确定请求，并在重试时复用相同参数。
 
 ## 快速开始
 
-将整个项目目录放入 Agent 的 `skills` 目录（Hermes、Claude Code 等平台的技能目录），Agent 即可协助管理日历；也可直接在终端中手动运行：
+将完整项目目录放入 Agent 的 skill 目录，或用 Python 3.10+ 直接运行。[SKILL.zh-CN.md](SKILL.zh-CN.md) 是中文 Agent 入口。
 
 ```bash
-# 第一次使用：登录认证。终端会显示一个验证码，
-# 浏览器打开 microsoft.com/link 输入它即可完成授权
+# 本地工具：不访问日历，不要求登录。
+python scripts/outlook_cal.py context --timezone Asia/Shanghai --json
+python scripts/outlook_cal.py date --base 2026-09-07 --days 4 --json
+
+# 日历命令先登录，按提示完成设备码认证。
 python scripts/outlook_setup.py
 
-# 查看未来 7 天的日程
-python scripts/outlook_cal.py list --days 7
-
-# 添加一条日程：标题、开始时间、结束时间，可选提前提醒（分钟）
-python scripts/outlook_cal.py add "周会" "2026-08-10 09:00" "2026-08-10 10:00" --remind 10
+# 日期仅为示例，请替换为实际需要的绝对日期。
+python scripts/outlook_cal.py list --from 2026-09-09 --days 7 --timezone Asia/Shanghai --json
+python scripts/outlook_cal.py add "计划讨论" "2026-09-11 15:00" "2026-09-11 15:30" --remind 10 --timezone Asia/Shanghai --json
+python scripts/outlook_cal.py free 2026-09-11 --from 14:00 --to 17:00 --timezone Asia/Shanghai --json
 ```
 
-依赖 requests、msal、tzdata 会在首次运行时自动安装，无需手动操作。认证一次后自动续期，登录信息保存于用户主目录下的 `~/.outlook_cal_token.json`。
+登录及日历命令会自动安装缺失的 `requests`、`msal`、`tzdata`。离线工具不安装依赖；地区时区数据不可用时，用同一解释器运行 `python -m pip install tzdata`。设备码登录将凭据存放在 `~/.outlook_cal_token.json`，工具在可能时自动续期。账户与 Azure 应用设置见[连接配置](references/configuration.zh-CN.md)。
 
-## 使用示例
+## 分工
 
-```
-$ python scripts/outlook_cal.py list --days 3
-📅 08月10日 周一
-    🕐 08/10 09:00 - 08/10 10:00  周会 🔁每周一 [工作]
-    🆔 AAMkAD...
+| 模型 | Python 后端 |
+|---|---|
+| 结合对话理解相对日期和自然语言 | 提供当前时钟/时区，按明确偏移计算日期 |
+| 识别日程、修改字段、单次/系列范围 | 校验操作参数、日期格式、时间范围、重复结构 |
+| 消除影响操作的歧义，复用已有授权 | 处理时区转换和全天日期边界 |
+| 固定绝对参数并在重试时复用 | 认证、接口分页、按规则重试、返回 JSON |
+| 核实用户要求的结果并准确汇报 | 返回服务端数据和结构化错误 |
 
-$ python scripts/outlook_cal.py free "2026-08-14" --from 09:00 --to 18:00
-📅 08月14日 周五：09:00-10:00、14:00-18:00 空闲
+例如，用户仍可说“本周五 14:00 到 17:00 有空吗”。模型读取 `context`，在周一 `week_start` 上加四天，再将计算出的日期传给 `free`；后端本身拒绝 `本周五`、`今天下午2点` 等字符串。
 
-$ python scripts/outlook_cal.py delete <ID> -y
-🗑️ 已从日历中移除本次出现「周会」（其余出现保留）
-```
+## 明确的命令契约
 
-命令输出中的 🆔 行即为该日程的 ID，所有修改、删除、移动操作均需从中获取。
+- 日期格式为 `YYYY-MM-DD`，带时刻为 `YYYY-MM-DD HH:MM` 或 `YYYY-MM-DDTHH:MM`，各字段补零。时区通过单独的 `--timezone` 指定 IANA 或 Windows 名称，不指定则自动探测。
+- `list` 必须给 `--from` 或创建日期筛选，`free` 必须给日期。已移除 `today`/`tomorrow`/`week` 命令及 `--past`。
+- 创建时段日程必须给开始和结束，全天日程必须加 `--all-day`。两种类型之间转换必须明确开始与结束。
+- 重复规则通过 `--repeat` 或 `--repeat-file` 传 Graph pattern JSON 对象，不再解析自然语言。文件形式可避开 shell 引号转义问题。
+- `--json` 使 stdout 只有一个 JSON 值，警告和诊断信息走 stderr；解析 JSON 后恢复 Unicode。`--lang zh|en` 改变人类提示，不改变字段名。
+- 时段操作使用有效时区。全天日程尽量按邮箱时区写入，不可用时使用有效时区，以保留 Outlook 中的日历日期含义。
 
-## 工作原理
-
-设计思路可以概括为一句话：**输出永远可预测、可验证**——机器不会误读，人也易于理解。以下三条构成这一目标的支柱：
-
-- **走微软官方接口，和手动操作等价**：程序调用 Microsoft Graph API——微软为 Outlook 日历提供的官方接口，与在 Outlook 中手动操作的效果完全一致，改动实时同步到手机、电脑、网页。登录采用设备码方式：首次运行会得到一个验证码，浏览器打开 microsoft.com/link 输入即可，之后由微软的登录库（Microsoft Authentication Library，MSAL）自动续期。**没有本地服务常驻后台**。
-- **时区按电脑本地自动处理**：所有时间均按本地时区解析、显示与换算（Windows 官方时区名与 IANA 名全量映射），跨时区场景无需手动换算；探测异常时可通过 `TZ` 环境变量指定。
-- **全天日程按邮箱首选时区写入**：机器时区与 Outlook 账户时区不同时，全天日程也不会跨两天显示（升级后重跑一次 `python outlook_setup.py` 授权新权限）。
-- **输出遵循固定"协议"，机器不会读错**：命令的输出格式固定——每条日程的 ID 永远出现在以 🆔 开头的那一行（示例中的 `AAMkAD...`），时间、地点、类别等也都有固定的格式和标记。这些标记（emoji 锚点）与语言无关，中文、英文输出共用同一套，因此 AI 和脚本在任何语言环境下都能稳定解析。需要程序化使用时，追加 `--json` 即可获得纯净的 JSON 数据，其中不含任何提示性文字。
-
-## 开发
-
-如需参与开发，请先阅读 [DEVELOPMENT.zh-CN.md](DEVELOPMENT.zh-CN.md)——其中包含完整的输出协议、关键设计决策、多语言（i18n）约定和 Graph API 官方文档链接。
+完整参数见[命令参考](references/commands.zh-CN.md)和[定期日程指南](references/recurring-events.zh-CN.md)，实现边界和离线测试见 [DEVELOPMENT.zh-CN.md](DEVELOPMENT.zh-CN.md)。

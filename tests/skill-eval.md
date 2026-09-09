@@ -1,32 +1,34 @@
 # Skill-Level Evaluation Set
 
-Evaluates the **actual quality of operations** once the agent has loaded this skill, rather than merely verifying whether it triggers (trigger verification is in `trigger-eval.md`, output-protocol verification in `protocol-eval.md`).
+Evaluate observable task outcomes after loading the skill. Trigger checks are in `trigger-eval.md`; output checks are in `protocol-eval.md`.
 
-Following the skill design recommendations of Anthropic / OpenAI: triggering successfully ≠ operating as intended; a with/without baseline comparison is needed in fresh sessions.
+## Method
 
-## How to use
+Use fresh sessions and an isolated mock calendar. Establish that Outlook is the selected calendar. Record commands, returned data, questions, final event state, and the user's report. Compare with and without the skill when measuring its benefit; do not count this document itself as an executed benchmark.
 
-For each scenario, ask it verbatim in a **fresh session**, record the behavior with and without the skill respectively, and check against the pass criteria:
+For the dated scenarios, freeze the clock at **2026-09-09 (Wednesday), Asia/Shanghai**. Supply fixtures at query boundaries, including today, tomorrow, and the following day. No live account is required.
 
-- **Command invocation**: whether it called the `outlook_cal.py` CLI (rather than guessing)
-- **Argument correctness**: whether time arguments are resolved at run time (not dates from an earlier session)
-- **Iron-rule compliance**: whether it confirms before deleting, reads before modifying, and verifies by reading back after operations
-- **Failure handling**: whether on errors it reads the ❌ line and acts accordingly (no blind retries)
+## Scenarios
 
-## Evaluation scenarios
+| # | User request / fixture | Pass criteria |
+|---|---|---|
+| 1 | "What's on tomorrow?" | Uses `context` and explicit date arithmetic as needed, then `list --from 2026-09-10 --days 1`; query runs from September 10 00:00 to September 11 00:00, end excluded; reports matching titles and times, excluding neighboring dates. |
+| 2 | "Show this week's meetings", then "Show next week's meetings" | Uses September 7–14 and September 14–21 respectively, with exclusive ends; does not substitute a rolling seven-day window. |
+| 3 | "Move the event I added yesterday to today"; event created September 8 but scheduled September 15, 09:00–10:00 | Identifies by creation time, reads details as needed, moves to September 9 09:00–10:00 rather than adding one day, verifies final state, and reports the actual old date. Today-created candidates are excluded. |
+| 4 | "Confirmed: delete the September 10 14:00 project meeting, only this occurrence"; fresh full details and occurrence ID already available | Reuses consent without another question, deletes only the occurrence, verifies absence, and leaves the master and other occurrences intact. If target or scope were missing, clarification would be necessary. |
+| 5 | "Change the reminder to 10 minutes"; target unambiguous | Verifies the resulting reminder fields, not just title/time; unrelated fields stay unchanged. |
+| 6 | Add returns a timeout with an unknown server outcome | Checks for the intended event before resubmitting, avoids duplicate creation, and reports uncertainty if verification fails. |
+| 7 | "Add a meeting Friday afternoon"; no other timing context | Resolves the missing start and end/duration before writing; does not silently invent 15:00 or a one-hour duration. |
+| 8 | "Am I free this Friday 14:00–17:00?" | Queries September 11 within 14:00–17:00; distinguishes fully free from fully busy through JSON data. |
+| 9 | "Every other Wednesday, 09:00–09:30, eight times"; the first date is September 16 | Supplies explicit start/end and a weekly JSON pattern with interval 2, Wednesday, Monday week boundary, and count 8; verifies the returned pattern/range. |
+| 10 | Normalization happens at September 9 23:59; an uncertain write is checked after midnight | Retains September 9 and the original named timezone during verification/recovery; does not reinterpret the request as September 10. |
+| 11 | A November 1 01:30 event in America/New_York, without specifying which repeated clock time | Resolves the DST ambiguity before writing; uses the intended UTC instant with `--timezone UTC` if necessary, rather than choosing a fold silently. |
+| 12 | Change only the start date of a September 11–13 all-day trip to September 12 | Preserves the inclusive September 13 end and all-day type; verifies dates using the mailbox timezone convention. |
 
-| # | User request | Pass criteria (all must hold) |
-|---|--------------|-------------------------------|
-| 1 | "What's on my schedule tomorrow?" | ① called one of `today`/`list`/`week`; ② the command output contains the resolved current date (not an earlier session's date); ③ the report gives event titles + times, not just "queried" |
-| 2 | "Move Friday's meeting to next week" | ① locate first with `list`/`search` (get the 🆔), then `move`; ② restate the target event to the user or confirm by reading back before moving; ③ read back after `move` to verify the new date; ④ no fabricated IDs |
-| 3 | "Delete tomorrow afternoon's meeting" | ① restate the event (title + time) to the user and obtain consent before deleting; ② use the 🆔 from the output; ③ read back / report the actual result after deleting; ④ if the command fails, act on the ❌ line instead of retrying verbatim |
+## Assessment
 
-## Judgment criteria
+Judge the resulting dates, fields, scope, duplicate prevention, and report accuracy. Command names alone or compliance with a fixed number of reads do not establish success. Reusing fresh details and existing authorization is valid.
 
-- with/without baseline: without the skill, an agent may fabricate commands or ask the user to operate manually; with the skill, it should consistently follow the CLI flow
-- Iron rule 1 (fetch current time and timezone): in scenario 1, if the agent resolves "tomorrow" using a date from an earlier session, it's an immediate fail
-- Pass standard: all 3/3 scenarios must fully meet their criteria
+Pass standard: all 12 scenarios meet their criteria. Record any failures and the actual outputs. Offline command regressions in `test_events.py` and `test_protocol.py` complement this evaluation but do not replace independent agent runs.
 
-## Change checklist
-
-After modifying SKILL.md (iron rules, common tasks, output contract), re-run this evaluation set; protocol-layer changes (output format) run `protocol-eval.md`; trigger-description changes run `trigger-eval.md`.
+After changes to the entrypoint, rerun the relevant scenarios; description changes also require trigger evaluation, and output changes require protocol evaluation.

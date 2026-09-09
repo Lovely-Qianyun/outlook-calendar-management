@@ -1,99 +1,69 @@
 ---
 name: outlook-calendar-management
-description: "当用户提到 Outlook 日历/微软日历的任何日程操作时使用本 skill：查看安排、查找日程（标题/地点/类别）、添加会议/生日/提醒、改时间或标题、挪到其他日期、删除（定期日程单次或整系列）、查空闲时段、查定期日程下次时间、按添加时间查最近加的。管理 Outlook 日历（微软账户 / outlook.com）日程。不处理 Outlook 邮件（himalaya skill 负责）和其他日历（Google 日历等）。"
+description: "View, find, add, update, move, and delete Outlook / Microsoft calendar events, including recurring events and free-time queries. Use when the user names Outlook calendar or the conversation already establishes it as the calendar to manage. Does not handle email or other calendar products."
 license: "MIT"
 metadata:
-  version: 2.2.0
+  version: 3.0.0
 ---
 
 # Outlook 日历助手
 
-通过对话管理 Outlook 日历（微软账户 / outlook.com），无需打开 Outlook 应用，手机、电脑、网页实时同步。
+管理已连接账户的默认 Outlook 日历。由模型结合用户语言和上下文理解意图，再向附带的 Python CLI 传入明确参数。后端负责日期与重复规则校验、时区转换和 Microsoft Graph 调用，不解析自然语言日期或重复规则。
 
-## 能做什么
+## 运行入口
 
-| 你想做什么 | 做法 |
+相对于本 skill 目录解析路径。使用可用的 Python 3.10+ 解释器（`python` 或 `python3`）：
+
+```bash
+python "<skill目录>/scripts/outlook_cal.py" context --json --lang zh
+```
+
+下文省略此前缀。优先使用 `--json`，JSON 字段名不随语言变化。中文对话加 `--lang zh`，其他语言加 `--lang en`；回复沿用用户语言。`--json`、`--lang`、`--timezone` 可放在任意子命令前或后。
+
+首次连接或切换账户时读取 [configuration.zh-CN.md](references/configuration.zh-CN.md)，通过 `scripts/outlook_setup.py` 认证。需要隔离测试登录时，按配置文档设置独立的 `OCAL_TOKEN_PATH`，写入前核对目标账户。登录及日历命令会自动安装缺失的 requests/msal/tzdata。`context` 和 `date` 不访问日历、不登录、不安装依赖；地区时区需要系统时区数据或 tzdata。
+
+## 执行前理解意图
+
+- 解析相对日期时，若没有新鲜的当前时间与有效时区，先调用 `context --json`。返回 `now`、`today`、`timezone`、`utc_offset`、英文小写的 `weekday` 和本周一的 `week_start`。用户指定时区时使用 `context --timezone "Area/City" --json`。后续日历命令显式复用该时区名称；仅有 UTC 偏移无法描述夏令时规则。
+- 用 `date --base YYYY-MM-DD --days N --json` 或 Python `datetime`/`calendar` 运算得到具体日期。日期工具按有符号天数计算，不读取时钟。本周五是 `context.week_start` 加 4 天，下周一加 7 天。结合上下文消除歧义，只询问影响本次操作的缺失信息。
+- 日历输入只接受补零的 `YYYY-MM-DD`、`YYYY-MM-DD HH:MM`、`YYYY-MM-DDTHH:MM`；纯日期参数不接受时刻，时区单独传入。创建时段日程必须给出开始和结束；全天日程必须指定 `--all-day`。不要擅自填充时长，也不要把缺少时刻解释成全天。
+- 写入前保留解析后的目标、绝对日期时间、时区和待修改字段。验证及重试复用这些明确值，即使跨过午夜也不重新解释原始相对表达。
+
+## 选择并执行操作
+
+| 任务 | 命令 |
 |---|---|
-| 看安排：今天/明天/本周/某段时间 | `today` / `tomorrow` / `week` / `list` |
-| 找日程：按标题/地点/备注/类别 | `list --search` / `list --category` |
-| 查"我昨天加了什么" | `list --created-after 日期` |
-| 加日程：会议/生日/提醒/定期 | `add` |
-| 改日程：时间/标题/类别/提醒等 | `update` |
-| 挪日程：整体平移或移到某天，保留时段 | `move` |
-| 删日程，定期日程可选单次/整系列 | `delete` |
-| 问哪天有空 / 空闲时段 | `free` |
-| 定期日程下次什么时候 | `next` |
-| 看某个日程的详情 | `read` |
-| 日历连不上 / 查看状态 | `status` |
-| 机器可读输出，供程序/脚本用 | 任意命令加 `--json` |
+| 某天或某段日期的日程 | `list --from YYYY-MM-DD --days N --json` |
+| 在上述范围筛选 | 加 `--search "词"`、`--category "类别"` 或 `--reminders` |
+| 某段日期内创建的日程 | `list --created-after YYYY-MM-DD --created-before YYYY-MM-DD --json` |
+| 详情 / 定期日程下次出现 | `read <ID>` / `next <ID>` |
+| 创建 / 修改 / 移动 / 删除 | `add` / `update` / `move` / `delete` |
+| 空闲时段 / 连接状态 | `free YYYY-MM-DD --from HH:MM --to HH:MM` / `status` |
 
-> 小输出优先：只看"有什么/什么时候"用 `list --summary` 或 `--json`，不要动辄拉全量；不确定时间范围先用默认 7 天。
+`list` 必须明确给出 `--from` 或 `--created-after`。`--days N` 覆盖 N 个自然日，在最后一天的次日零点结束且不包含该边界。创建时间筛选独立于日程发生日期，`--created-before` 为不包含的上界。查询安排未指定范围时，可先从 `context.today` 起查七天，汇报时说明范围。`--summary` 只有每天数量，需要标题和时间时使用普通 JSON 列表。
 
-## 操作铁律
+ID 使用返回的 `id` 和 `seriesMasterId`。修改、删除前用 `read` 获取相关现有字段，或复用新鲜完整的结果。多匹配时消除歧义，区分定期日程单次与整系列。已对明确对象与范围给出的授权继续有效，`--json`/`-y` 仅跳过 CLI 交互。识别对象后优先使用明确 ID；`--search` 只是带固定搜索范围的便利功能。
 
-以下规则适用于每次操作，不可跳过：
+写入后回读一次，核对用户要求改变的字段；删除后查询相关范围确认目标已不存在。按实际结果汇报前后值。写入结果不明时先检查服务端状态，再决定是否重发已固定的请求；验证失败不等于写入失败。临时只读故障可重试一次；认证或权限问题用 `status` 和 [troubleshooting.zh-CN.md](references/troubleshooting.zh-CN.md) 排查。恢复失败时说明尚未解决的部分。
 
-1. **每次操作前先取"当前时间 + 当前时区"**：**任何操作开始前**，先用命令行获取系统当前时间和时区——Windows（PowerShell）用 `Get-Date` + `Get-TimeZone`，Linux/macOS 用 `date`（如 `date +"%F %T %Z"`），**绝不用旧会话里见过的日期或时区**。需要核对"今天是几号"时可配合运行 `status`（输出里有当前日期，含年份与星期）。相对时间词可以直接传给命令（`今天 14:00`、`本周五 15:00`、`今天下午2点`），命令会在运行时刻按系统时钟解析，输出里会显示解析后的日期——确认不是昨天
-2. **删除前先确认**：向用户复述待删除的日程（标题+时间），获得明确同意后再执行
-3. **修改前先查看现状**：先执行 `read` 获取当前内容，再决定修改内容
-4. **事件 ID 仅从输出获取**：命令输出中的 🆔 行即事件 ID，严禁猜测或编造
-5. **操作后回读验证再汇报**：add/update/move/delete 执行后，用 `read`/`list` 回读一次核对实际结果（标题+时间），确认与意图一致后再向用户汇报；不能只凭命令返回值就断言"已完成"
-6. **失败不盲目重试**：命令非零退出时，先读 ❌ 行（`--json` 时读 error 字段），按提示处理——权限/登录问题 → 重跑 `python outlook_setup.py`；查不到 → 扩大时间范围或换搜索词；严禁原样重试同一命令。仍无法解决时对照 `references/troubleshooting.zh-CN.md` 处理，或如实上报用户
+## 规范化示例
 
-## 输出契约
+以下日期是假设值：`context` 返回 **2026-09-09、Asia/Shanghai**，`week_start` 为 **2026-09-07**。实际操作从当前上下文计算，不能照抄示例日期。
 
-命令输出是 agent 与脚本的接口，只依赖结构，不依赖文案：
+- **“我昨天加的那件事，改到今天。”** 用 `date --base 2026-09-09 --days -1 --json` 计算昨天。通过 `list --created-after 2026-09-08 --created-before 2026-09-09 --timezone Asia/Shanghai --json` 找候选，识别目标后执行 `move <ID> --to 2026-09-09 --timezone Asia/Shanghai --json`。原定发生日期可能在未来，不能按创建日期推断移动天数。
+- **“加一个本周五 15:00 的半小时会议，提前十分钟提醒。”** 用 `date --base 2026-09-07 --days 4 --json` 算出周五，再执行 `add "会议" "2026-09-11 15:00" "2026-09-11 15:30" --remind 10 --timezone Asia/Shanghai --json`。
+- **“本周五 14:00 到 17:00 有空吗？”** 同样计算周五后执行 `free 2026-09-11 --from 14:00 --to 17:00 --timezone Asia/Shanghai --json`。
+- **“把每周例会改成周三。”** 先明确单次或系列范围。修改系列规则时读取 [recurring-events.zh-CN.md](references/recurring-events.zh-CN.md)，构造 Graph pattern JSON 文件，再执行 `update <seriesMasterId> --repeat-file <规则文件> --timezone <已确定时区> --json`。保留或按用户意图改变原有结束条件；执行已授权的系列变更前说明对例外日程的影响。
 
-1. **锚点 + 结构提取**：🆔/✅/⚠️/🆕 锚点、缩进、`HH:MM-HH:MM` 时段、JSON 结构是语言无关的协议；行内文案随语言，不作为提取依据
-2. **事件 ID 仅从 🆔 行获取**（严禁猜测/编造）；定期系列主事件 ID 从 🆕 行取（"🆕 + 冒号"结构，冒号前文案随语言）
-3. **失败信号**：退出码 1 + stderr `❌` 行；`--json` 时 stdout 为 `{"error": ..., "exit": 1}`
-4. **程序化/批量场景一律加 `--json`**：stdout 纯净 JSON，无人类提示混入
+## 输出与参考
 
-## 常见任务
+JSON 操作模式下，stdout 只有一个 JSON 值，诊断信息走 stderr。检查退出码：错误为 `{"error": ..., "exit": 1}`；`status` 未连接时返回含 `connected: false` 的连接状态对象。`--help` 仍为文本。解析 JSON 后使用字段，包括已还原的 Unicode 字符。空闲查询使用 JSON，因为人类输出没有时段列表时，可能表示全空闲或全忙碌。
 
-### "看看我这周/下周的安排"
-→ `week` 看本周，`list --days 7` 看未来 7 天。想看更久用 `list --days 30`；看过去的用 `list --past 30`。
-
-### "我昨天加的那件事，改到今天"
-→ ① `list --created-after <昨天的日期>` 找到它，记下 🆔 → ② `read` 确认是这件 → ③ `move <ID> --days 1`（或 `--to 今天`，保留原时段）→ ④ 回读核对后告诉用户"已从昨天 X 点改到今天 X 点"。关键词足够独特时也可一步完成：`move --search "关键词" --days 1`（唯一匹配直接操作，多匹配会列出候选）。
-
-### "加一个周五下午的会，提前10分钟提醒"
-→ `add "会议名" "本周五 15:00" "本周五 16:00" --remind 10`。
-"今天下午两点的会" → `add "会议名" "今天 14:00" "今天 15:00"`。相对时间词由命令按系统当前日期解析，输出会显示具体日期，确认无误即可。只给日期没给具体时间会按全天处理；默认会提示时间冲突，不阻断。
-
-### "把每周例会改成周三"
-→ 定期日程的"每次"和"整个系列"是两回事：先 `read` 拿系列主事件 ID（🆕 行）→ `update <主ID> --repeat "每周三"`。注意：改系列规则会重置之前单独改过的某几次，先提醒用户。
-
-### "周五下午几点有空"
-→ `free "2026-08-14" --from 09:00 --to 18:00`，会列出空闲时间段。
-
-### "周五那个会找不到了"
-→ ① `list --search "会议"` 无结果时，先确认搜索词与时间范围（默认只查未来 7 天）→ ② 用 `list --days 14` 或 `--past` 扩大范围 → ③ 仍无则如实告诉用户"没找到"并给出建议，**不编造日程**。
-
-### "日历连不上了 / 权限报错"
-→ ① 跑 `status` 确认连接与登录状态 → ② 提示 invalid_grant/401/403 时按 `references/troubleshooting.zh-CN.md` 处理（通常重跑 `python outlook_setup.py` 重新授权）→ ③ 网络问题可稍后重试一次，仍失败如实上报。
-
-## 关键概念
-
-- **定期日程**（每周例会、每月 15 日……）：对"某一次"执行的修改/删除仅影响该次；修改规则、删除整个系列须操作**主事件**。详见 `references/recurring-events.zh-CN.md`
-- **运行环境**：Windows / Linux / macOS 均可；命令示例中的 `python` 在部分系统（如 macOS）为 `python3`，按实际解释器名运行即可
-- **时间输入**：时段用 `YYYY-MM-DD HH:MM`（"下午3点" = `15:00`），全天只给日期；支持相对时间（`今天`/`明天`/`本周X`/`下周X` 及英文 `today`/`this friday` 等，可带时刻），由命令按运行时刻系统时钟解析——**不要自己推算日期**（完整约定见 `references/commands.zh-CN.md`）。时区自动按电脑本地时区处理，跨时区自动换算；探测异常时用 `TZ` 环境变量指定（如 `TZ=Asia/Shanghai`）。全天日程按 Outlook 邮箱首选时区写入，机器时区与邮箱时区不同也不会跨天显示；此功能需要 `MailboxSettings.Read` 权限。完整授权共 3 个权限：`Calendars.ReadWrite`（日程读写）、`MailboxSettings.Read`（邮箱时区）、`User.Read`（登录身份），**升级后请重跑一次 `python outlook_setup.py` 重新授权**
-- **确认与脚本交互**：脚本默认会再次询问确认；agent 场景应直接使用 `-y` 跳过（非交互环境中输入不可用时，脚本会自动取消）
-- **输出语言**：默认按系统语言自动选择（中文系统 → 中文，其他 → 英文）；可用 `--lang zh|en` 或环境变量 `OCAL_LANG` 覆盖。提取信息只依赖「输出契约」中的锚点与结构，与语言无关
-
-- **首次运行自动安装依赖**：脚本首次运行缺少 `requests`/`msal`/`tzdata` 时会自动 pip 安装。`tzdata` 缺失会导致 Windows 时区解析失败、日程时间偏移，必须保留。安装失败时会给出手动命令；若提示"依赖仍缺失"，需重启终端
-
-## 输出语言 / Output Language
-判断用户本次对话的语言（看当前消息与最近对话）：
-- 用户用中文 → 用中文回复，所有命令加 `--lang zh`；
-- 否则 → 用英文回复，加 `--lang en`。
-不要反问用户想要哪种语言。脚本默认按系统语言，以你按对话语言得出的结果为准。
-
-## 详细参考
-
-| 文件 | 什么时候读 |
+| 何时读取 | 文档 |
 |---|---|
-| `references/commands.zh-CN.md` | 需要完整参数列表和更多示例时 |
-| `references/recurring-events.zh-CN.md` | 涉及定期日程（创建/改单次/删系列）时 |
-| `references/configuration.zh-CN.md` | 首次连接日历、换账户、自带 Azure 应用时 |
-| `references/troubleshooting.zh-CN.md` | 出错、报错、结果不对时 |
+| 参数、明确时间格式、提醒、查询边界或 JSON 结构 | [commands.zh-CN.md](references/commands.zh-CN.md) |
+| 重复规则字段、结束条件、单次出现或整个系列 | [recurring-events.zh-CN.md](references/recurring-events.zh-CN.md) |
+| 连接、切换账户或 Azure 应用配置 | [configuration.zh-CN.md](references/configuration.zh-CN.md) |
+| 认证、安装、时区错误或异常结果 | [troubleshooting.zh-CN.md](references/troubleshooting.zh-CN.md) |
+
+时段日程使用选定的有效时区。全天日程尽量按邮箱时区写入，不可用时回退到有效时区，以保持 Outlook 中的日历日期。时区或权限不一致时先排查，再决定是否重复写入。

@@ -10,11 +10,32 @@ msal 是假的（通过 sys.modules 注入 _FakeMSAL），token 文件用 tmp_pa
 import json
 import sys
 import time
+import runpy
+from pathlib import Path
 
 import pytest
 
 import ocal_auth as auth
 from ocal_errors import CalError
+
+
+def test_explicit_credential_path_is_shared_with_setup(tmp_path, monkeypatch):
+    isolated = tmp_path / "test account token.json"
+    monkeypatch.setenv("OCAL_TOKEN_PATH", str(isolated))
+    loaded = runpy.run_path(auth.__file__)
+    assert Path(loaded["TOKEN_PATH"]) == isolated.resolve()
+    # Importing either module never reads or writes a login file.
+    assert not isolated.exists()
+    monkeypatch.setattr(auth, "TOKEN_PATH", loaded["TOKEN_PATH"])
+    setup = runpy.run_path(str(Path(auth.__file__).with_name("outlook_setup.py")))
+    assert setup["TOKEN_PATH"] == loaded["TOKEN_PATH"]
+    assert not isolated.exists()
+
+
+def test_default_credential_location_is_preserved(monkeypatch):
+    monkeypatch.delenv("OCAL_TOKEN_PATH", raising=False)
+    loaded = runpy.run_path(auth.__file__)
+    assert Path(loaded["TOKEN_PATH"]) == Path("~/.outlook_cal_token.json").expanduser().resolve()
 
 
 @pytest.fixture

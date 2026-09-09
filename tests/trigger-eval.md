@@ -8,10 +8,12 @@ For each prompt, ask it verbatim in a **fresh session** and observe whether the 
 
 - should-trigger all hit → no missed triggers
 - should-not-trigger all miss → no false triggers
-- On a missed trigger, add keywords that users naturally use to the description
-- On a false trigger, add exclusion conditions to the description, or move the scenario into the "not for" section
+- On a missed trigger, check whether context and capability are described clearly
+- On a false trigger, check the product and task boundaries
 
 Target: should-trigger 12/12, should-not-trigger 6/6.
+
+For positive prompts that omit the product, first establish in the conversation that the user has selected Outlook calendar. Without a selected product or established context, do not bind generic scheduling requests to Outlook.
 
 ## should-trigger
 
@@ -34,17 +36,13 @@ Target: should-trigger 12/12, should-not-trigger 6/6.
 
 | # | User request | Why it shouldn't trigger |
 |---|--------------|--------------------------|
-| 1 | Write an email to my boss | Email belongs to the himalaya skill |
+| 1 | Write an email to my boss | Email is outside this skill |
 | 2 | Check my inbox | Email |
 | 3 | Add a reminder in Google Calendar | Other calendar |
 | 4 | Check the weekend on Apple Calendar | Other calendar |
 | 5 | What is Outlook? | Pure knowledge question, no calendar operations |
 | 6 | How many workdays are there in 2026? | Unrelated to calendar operations |
 
-## Checking the current description
+## Assessing the description
 
-When changing the description, go through this table item by item: every should-trigger scenario must have a matching trigger keyword, and every should-not-trigger scenario must have an exclusion basis. The current description's trigger-keyword coverage:
-
-- View schedule / find / add / change / move / delete / free / next / recently added → covers all 12 should-trigger items
-- Not for email (himalaya handles it) and other calendars → covers should-not-trigger items 1-4
-- Items 5 and 6 rely on the semantic constraint of "calendar operations" as a backstop; if false triggers appear, write these two scenarios into the description's exclusion section
+Judge whether the request is an Outlook calendar operation in its actual conversation context, not whether each example word appears in the description. Record observed loads and misses. Revise the capability or boundary only when a failure shows it is unclear; avoid growing keyword and exclusion lists for every example.

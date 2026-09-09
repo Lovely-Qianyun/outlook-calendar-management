@@ -21,8 +21,10 @@
 
 ## 认证
 
+从项目根目录运行。
+
 ```bash
-python outlook_setup.py <你的Client ID>
+python scripts/outlook_setup.py <你的Client ID>
 ```
 
 之后的流程与默认应用完全一致：脚本打印验证码 → 浏览器打开 `https://www.microsoft.com/link` 输入 → Outlook 账户授权。token 自动续期。
@@ -33,4 +35,4 @@ python outlook_setup.py <你的Client ID>
 |------|-----------|
 | 设备码报"找不到应用" | 账户类型未选择"个人 Microsoft 帐户"，或"允许公共客户端流"未开启 |
 | 403 Forbidden | `Calendars.ReadWrite` 委托权限未添加 |
-| 验证码过期 | 重新运行 `python outlook_setup.py` 再试一次 |
+| 验证码过期 | 重新运行 `python scripts/outlook_setup.py` 再试一次 |

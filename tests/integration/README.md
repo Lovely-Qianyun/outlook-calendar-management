@@ -1,54 +1,35 @@
-# Live Integration Drill (optional)
+# Optional live calendar smoke test
 
-drill.sh / drill-en.sh are 106 behavior assertions against the real Microsoft Graph, covering what unit tests cannot verify.
+`drill.py` exercises the calendar CLI against Microsoft Graph. It creates two uniquely named test events (one is a two-occurrence series), reads and changes them, then deletes only the IDs returned by this run. It never clears the account or deletes events found by a search. Prefer a dedicated test account.
 
-## ⚠️ Destructive warning (agents must read)
+Normal `python -m pytest tests/` runs are offline, including the fake-client checks for this runner. Do not run the live smoke test as part of routine automated verification.
 
-> **Any agent (AI assistant) MUST clearly explain the following consequences to the user and obtain the user's explicit consent before running drill.sh / drill-en.sh:**
->
-> ① The "baseline cleanup" at the start of the scripts **deletes ALL events in a ±400-day window**, including **ALL recurring series masters** - this is **permanent, irrecoverable deletion**, with no recycle bin
-> ② If the currently authenticated account is your personal real calendar, **all your personal events will be gone** after the run
-> ③ The scripts may only run against a **dedicated test account**; pointing them at a real account causes a serious incident
-> ④ The scripts have a **double safeguard**: ① the `confirm` argument must be explicitly passed; ② the test-account email must be specified and match the currently connected account (verified live via `status`) - on mismatch they refuse to run
+## Run explicitly
 
-## Warnings
+Authenticate with the intended test account first. To retain an existing connection, set `OCAL_TOKEN_PATH` to a separate token-file path in the same terminal before both login and testing; see [configuration](../../references/configuration.md). The runner's subprocesses inherit that setting.
 
-- **You must use a dedicated test account**. The baseline cleanup at the start of the scripts deletes all events in a ±400-day window and all recurring series masters; pointing them at your personal real calendar causes an incident
-- The scripts really write and delete events; leftover test data in the calendar after the drill is normal
-- Requires network access and cannot run in CI; for daily development, `python -m pytest tests/` is the norm
-
-## Usage
-
-```bash
-python outlook_setup.py   # authenticate with the test account first; token stored at ~/.outlook_cal_token.json
-bash tests/integration/drill.sh confirm zrancalendar@outlook.com     # Chinese-output version (2nd argument = test account)
-bash tests/integration/drill-en.sh confirm zrancalendar@outlook.com  # English-output version (OCAL_LANG=en)
-# or: TEST_ACCOUNT=zrancalendar@outlook.com bash tests/integration/drill.sh confirm
+```text
+python scripts/outlook_setup.py
+python tests/integration/drill.py --account test@example.com --confirm
+python tests/integration/drill.py --account test@example.com --confirm --lang zh
 ```
 
-Account check: the script runs `--json status` first at startup; when the currently connected account differs from the specified test account (including not connected), it refuses to perform any deletion. This is a machine-level guard on top of `confirm` - even if a real account's token were misused, no real events would be deleted.
+Replace `test@example.com` with the connected calendar account. Both `--account` and `--confirm` are required for writes. The runner checks the live `status --json` account before each write and each cleanup deletion; an account mismatch stops that operation. `--lang` selects the underlying CLI language. The final machine-readable report uses the same JSON fields in either language.
 
-The 106 assertions of the two scripts correspond one-to-one; only the expected copy differs. Pass criterion: 106/106.
+All commands run as Python subprocess argument lists, so Windows does not need Bash. Dates are explicit, timed events have both start and end, recurrence uses JSON, and the timezone is UTC. Test dates start 30 days after the current UTC date. A fixed three-day query window includes the two expected occurrence dates and one extra day to detect excess occurrences. Events are marked free and have a unique `ocal-smoke-...-` subject prefix.
 
-## Coverage (106 items)
+## Coverage and results
 
-| Group | Content | Items |
-|-------|---------|-------|
-| 0. Account guard + baseline cleanup | Account-consistency check; deletes series masters before single events (_get_all paging); window empty after cleanup | 1 |
-| 1. Time-parsing edges | Zero-padding/omission leniency, out-of-range and natural-language errors, end<start | 11 |
-| 2. remind edges | 0/negative/all-day over cap | 3 |
-| 3. Recurrence-rule edges | All rule forms + invalid input | 12 |
-| 4. Conflict-detection edges | Overlap/touching/free/all-day | 5 |
-| 5. update edges | Empty fields/clearing/time validation/all-day-conversion error | 8 |
-| 6. Deletion edges | Nonexistent ID, EOF cancel | 2 |
-| 7. Recurring-series depth | Nth occurrence/exception/next/delete occurrence/delete series | 9 |
-| 8. free/command edges | Invalid windows/normal output/multi-day | 6 |
-| 9. --json edges | Pure JSON/structured errors/stderr | 4 |
-| 10. Other edges | emoji/long notes/multiple categories/importance | 5 |
-| 11. move special | --days/--to/0 days/argument conflict/all-day/series warning/cross-boundary error | 9 |
-| 12. Multi-day all-day / quick commands / filters | add+update multi-day all-day, multi-day all-day 2nd-day conflict warning, today/tomorrow/week, --created-after+--reminders, private/importance display | 12 |
-| 13. v1.2.0 behavior regression | Timed-reminder minute semantics, cancelled occurrence doesn't occupy free time, delete-occurrence copy, remove recurrence | 5 |
-| 14. TZ env var override | Real Graph queries under TZ=Asia/Hong_Kong, TZ=America/Phoenix (official Windows name mapping + Prefer header accepted) | 2 |
-| 15. DST transition day (TZ=America/New_York) | Event creation and read-back on fall-back day, warning for nonexistent time on spring-forward day, free/list across DST | 5 |
-| 16. Mailbox timezone alignment | status hints mailbox/local timezones differ; all-day events written in the mailbox's preferred timezone (local timezone overridden by TZ to US Eastern) | 2 |
-| 17. Relative times | add with "today/tomorrow" relative times; created events land on the correct dates | 4 |
+The smoke test checks `context`, deterministic `date` arithmetic, timed `add` and `read`, subject `update`, absolute-date `move`, explicit-window `list`, the response structure of `free`, and daily recurring creation. It verifies event read-back values, the series rule, and exactly two expanded occurrences with the requested start/end times. After cleanup, it queries the fixed test window and confirms that the known event IDs and their `seriesMasterId` matches are absent. Detailed validation, DST boundaries, other recurrence patterns, free-slot correctness, and error cases belong to the offline tests.
+
+Exit code 0 and `"ok": true` mean the checks and cleanup succeeded. On failure, the report includes:
+
+- `errors`: failed checks or cleanup operations.
+- `remaining_ids`: IDs created by this run whose deletion could not be confirmed.
+- `deletion_checks`: read-back status for attempted deletions: `absent`, `present`, or `unverified`.
+- `unknown_create_subjects`: unique subjects for create attempts that failed to return a usable ID; their outcome may be unknown.
+- `unknown_create_checks`: read-only checks of those exact subjects within the fixed window: `observed`, `not_found`, or `unverified`, with any matching IDs and times. Observed IDs are never added to automatic cleanup.
+- `test_window`: the frozen date range and timezone used for these checks.
+- `subject_prefix`: the run identifier for manual inspection.
+
+Cleanup runs even after a check fails. It only attempts returned create IDs and rechecks the account before every deletion and diagnostic window query. A timeout, malformed response, or other uncertain write result is not retried by the runner. A failed absence check never causes another deletion attempt. If a create returned no ID, the runner queries its exact subject for diagnosis and reports what it observes without repeating the create or deleting discovered IDs. A `not_found` observation is limited to the frozen window and does not prove the write never happened. Inspect unresolved entries in the expected account before rerunning. Terminating the process forcibly can prevent cleanup; the unique subject prefix helps identify any test leftovers.

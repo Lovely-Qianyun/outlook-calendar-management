@@ -8,11 +8,16 @@ SKILL 与 protocol-eval.md 承诺的解析方式在这里逐条钉住：
 - zh/en 锚点完全一致；--json 错误形状 {"error", "exit": 1}
 """
 import json
+import io
 import re
+import sys
 from datetime import date
 
+import pytest
+
 import ocal_events as ev
-from ocal_i18n import set_lang
+from ocal_errors import CalError
+from ocal_i18n import set_lang, t
 from test_events import _args, _event, _mock_net
 
 # 协议承诺的正则（与 tests/protocol-eval.md 保持一致，改动必须两处同步）
@@ -33,13 +38,23 @@ def _add_args(**kw):
     return _args(**base)
 
 
+def _run_cli(monkeypatch, argv, *, bootstrap=False):
+    """运行真实参数解析/分发/错误边界，跳过依赖安装和 stdio 重配置。"""
+    import outlook_cal
+    if not bootstrap:
+        monkeypatch.setattr(outlook_cal, "ensure_deps", lambda: None)
+    monkeypatch.setattr(outlook_cal, "harden_stdio", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["outlook_cal.py", *argv])
+    return outlook_cal.main()
+
+
 class TestIdAnchors:
     """🆔/🆕 锚点的缩进契约：agent 提取 ID 的唯一来源。"""
 
     def test_list_id_extraction(self, capsys, monkeypatch):
         """list 的 🆔 行 4 空格缩进，逐条可提取。"""
         _mock_net(monkeypatch, get_all=lambda *a, **k: [_event(id="L1"), _event(id="L2")])
-        ev.cmd_list(_args(days=7, past=0))
+        ev.cmd_list(_args(days=7, from_date="2026-08-10"))
         out = capsys.readouterr().out
         assert ID_LIST.findall(out) == ["L1", "L2"]
 
@@ -148,6 +163,140 @@ class TestFreeSlots:
 
 class TestJsonMode:
     """--json 的纯净性契约。"""
+
+    @pytest.mark.parametrize("lang", ["zh", "en"])
+    @pytest.mark.parametrize("kind", ["single", "occurrence", "master"])
+    @pytest.mark.parametrize("fail_patch", [False, True])
+    @pytest.mark.parametrize("json_after_command", [False, True])
+    def test_move_json_result_or_error(self, capsys, monkeypatch, lang, kind,
+                                       fail_patch, json_after_command):
+        """普通/系列/单次移动：成功与 PATCH 失败都只有一个 JSON，提示只在 stderr。"""
+        event = _event(id="TARGET", subject="会议 🗓️",
+                       type={"single": "singleInstance", "occurrence": "occurrence",
+                             "master": "seriesMaster"}[kind],
+                       seriesMasterId="MASTER" if kind == "occurrence" else None,
+                       recurrence={"pattern": {"type": "daily", "interval": 1},
+                                   "range": {"type": "noEnd", "startDate": "2026-08-10"}}
+                       if kind == "master" else None)
+        calls = []
+
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            calls.append((method, endpoint, data))
+            if method == "GET":
+                return event
+            if fail_patch:
+                raise CalError("Graph rejected update: 日程 🗓️")
+            return {**event, **data}
+
+        _mock_net(monkeypatch, call_fn=fake)
+        argv = ["--lang", lang, "move", "TARGET", "--days", "1"]
+        argv.insert(3 if json_after_command else 0, "--json")
+        code = _run_cli(monkeypatch, argv)
+        cap = capsys.readouterr()
+        result = json.loads(cap.out)
+        assert [(method, endpoint) for method, endpoint, _ in calls] == [
+            ("GET", "/me/events/TARGET"), ("PATCH", "/me/events/TARGET")]
+        if fail_patch:
+            assert code == 1
+            assert result == {"error": "Graph rejected update: 日程 🗓️", "exit": 1}
+        else:
+            assert code == 0
+            assert result["id"] == "TARGET"
+            assert result["subject"] == event["subject"]
+            assert result["start"]["dateTime"] == "2026-08-11T09:00:00"
+            assert result["end"]["dateTime"] == "2026-08-11T10:00:00"
+        if kind == "single":
+            assert cap.err == ""
+        else:
+            assert t("warn_move_occ" if kind == "occurrence" else "warn_move_series") in cap.err
+
+    @pytest.mark.parametrize("lang", ["zh", "en"])
+    def test_update_without_fields_returns_json_error_without_write(self, capsys, monkeypatch, lang):
+        """无修改字段也遵守错误对象协议，且不能发出 PATCH。"""
+        calls = []
+
+        def fake(method, endpoint, token, data=None, prefer_immutable=False):
+            calls.append(method)
+            return _event()
+
+        _mock_net(monkeypatch, call_fn=fake)
+        code = _run_cli(monkeypatch, ["update", "E1", "--json", "--lang", lang])
+        cap = capsys.readouterr()
+        assert code == 1
+        assert json.loads(cap.out) == {"error": t("warn_nothing_to_update"), "exit": 1}
+        assert calls == ["GET"]
+        assert cap.err == ""
+
+    @pytest.mark.parametrize("lang", ["zh", "en"])
+    @pytest.mark.parametrize("argv", [[], ["read"], ["list", "--days", "bad"], ["unknown"]])
+    def test_argument_errors_are_json(self, capsys, monkeypatch, lang, argv):
+        """缺参数、非法类型和未知命令均通过入口统一输出 JSON 错误。"""
+        _mock_net(monkeypatch, call_fn=lambda *a, **k: pytest.fail("No network on parser errors"))
+        code = _run_cli(monkeypatch, ["--lang", lang, "--json", *argv])
+        cap = capsys.readouterr()
+        result = json.loads(cap.out)
+        assert code == result["exit"] == 1
+        assert result["error"]
+        assert cap.err == ""
+
+    @pytest.mark.parametrize("option", ["--js", "--json=invalid"])
+    def test_json_option_edge_cases_keep_structured_errors(self, capsys, monkeypatch, option):
+        """argparse 接受的缩写和非法 flag 赋值都不能绕过 JSON 错误边界。"""
+        code = _run_cli(monkeypatch, [option, "read"])
+        result = json.loads(capsys.readouterr().out)
+        assert code == result["exit"] == 1
+
+    def test_literal_json_positional_does_not_enable_json_mode(self, capsys, monkeypatch):
+        """-- 之后的 --json 是普通事件 ID，不能被入口误判为输出选项。"""
+        _mock_net(monkeypatch, call_fn=lambda *a, **k: _event(id="--json"))
+        assert _run_cli(monkeypatch, ["read", "--", "--json"]) == 0
+        assert ID_READ.findall(capsys.readouterr().out) == ["--json"]
+
+    @pytest.mark.parametrize("lang", ["zh", "en"])
+    def test_bootstrap_failure_is_json(self, capsys, monkeypatch, lang):
+        """依赖安装失败仍保留 stderr 诊断并输出 JSON 错误；不实际安装依赖。"""
+        import ocal_bootstrap
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(ocal_bootstrap, "_missing", lambda: ["requests"])
+        monkeypatch.setattr(ocal_bootstrap.subprocess, "run", lambda *a, **k:
+                            SimpleNamespace(returncode=1, stderr="offline installation failure"))
+        code = _run_cli(monkeypatch, ["--lang", lang, "--json", "status"], bootstrap=True)
+        cap = capsys.readouterr()
+        assert code == 1
+        assert json.loads(cap.out) == {"error": t("deps_fail_code", code=1), "exit": 1}
+        assert "offline installation failure" in cap.err
+
+    @pytest.mark.parametrize("lang", ["zh", "en"])
+    @pytest.mark.parametrize("fail_read", [False, True])
+    def test_json_preserves_unicode_through_gbk_pipe(self, monkeypatch, lang, fail_read):
+        """Windows GBK 管道不能替换日程/错误中的 Unicode 字符。"""
+        subject = "会议 🗓️ café"
+
+        def fake(*a, **k):
+            if fail_read:
+                raise CalError(subject)
+            return _event(subject=subject)
+
+        _mock_net(monkeypatch, call_fn=fake)
+        buffer = io.BytesIO()
+        stream = io.TextIOWrapper(buffer, encoding="gbk", errors="replace")
+        monkeypatch.setattr(sys, "stdout", stream)
+        code = _run_cli(monkeypatch, ["--lang", lang, "read", "E1", "--json"])
+        stream.flush()
+        output = buffer.getvalue().decode("gbk")
+        result = json.loads(output)
+        assert result["error" if fail_read else "subject"] == subject
+        assert code == int(fail_read)
+        assert output.isascii()
+
+    @pytest.mark.parametrize("argv", [["--json", "--help"], ["--json", "move", "--help"]])
+    def test_explicit_help_remains_text(self, capsys, monkeypatch, argv):
+        """显式帮助是 JSON 输出的例外，保持 argparse 的文本帮助与退出码 0。"""
+        with pytest.raises(SystemExit) as exc:
+            _run_cli(monkeypatch, argv)
+        assert exc.value.code == 0
+        assert "--json" in capsys.readouterr().out
 
     def test_json_error_shape_via_cli(self, capsys, monkeypatch):
         """出错时 stdout 是 {"error", "exit": 1}，可 json.loads，退出码 1。"""

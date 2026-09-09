@@ -12,12 +12,9 @@ import unicodedata
 
 from ocal_i18n import t, set_lang
 from ocal_bootstrap import ensure_deps, harden_stdio
-from ocal_auth import SCOPES
+from ocal_auth import SCOPES, TOKEN_PATH
 
 DEFAULT_CLIENT_ID = "cfec5685-f41e-4be9-80db-08eeddd763ba"  # Azure App: Agent Skill - Outlook Calendar Management
-
-TOKEN_PATH = os.path.expanduser("~/.outlook_cal_token.json")
-
 
 def _vis_width(s):
     """算字符串在终端里占几列：CJK 全角字符算 2 列。

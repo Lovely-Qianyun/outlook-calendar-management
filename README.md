@@ -1,66 +1,54 @@
 🌐 English | [中文](README.zh-CN.md)
 
-# Outlook Calendar Assistant
+<p align="center">
+  <img src="./icon/appIcon.png" alt="App Logo" width="20%">
+</p>
 
-*Chat-driven Outlook calendar management for AI agents: events, recurring series, free-time lookup — local, official Graph API, no MCP server.*
+# Outlook Calendar Management
 
-Let your AI assistant run your Microsoft Outlook calendar just by chatting. View, add, edit, move and delete events, manage recurring series, and find free time slots — all through natural language. A pure-local Python tool built on the official Microsoft Graph API (personal outlook.com / Microsoft 365 accounts), with one-time device-code login that renews automatically. No external MCP server, no background service. Timezone-aware, understands relative times like "next Tuesday 3pm", and answers in English or Chinese.
+Manage Outlook calendar events through conversation with an AI agent. The agent understands the request; this local Python CLI validates explicit inputs and calls Microsoft Graph. It supports personal outlook.com and Microsoft 365 accounts, recurring events, reminders, free-time queries, and English/Chinese output. No MCP server or background service is required.
 
-## Features
+Version **3.0.0** separates language understanding from execution. The CLI accepts absolute dates and structured recurrence patterns. Local `context` and `date` helpers provide the current timezone/clock and deterministic calendar arithmetic, so the agent can normalize a request before writing and reuse the same values during retries.
 
-- Full calendar operations: view, search by title / location / category, add, modify, move, delete
-- Recurring events: create, edit a single occurrence, edit the series rule, delete the whole series, query the next occurrence
-- Free-time lookup: ask "what time is free on Friday afternoon" and get the answer directly
-- Bilingual output, auto-selected by system language; override with `--lang zh|en` or the `OCAL_LANG` environment variable
-- Auto-installs dependencies on first run (including the `tzdata` timezone database, so times resolve correctly on Windows); no manual install
-- Relative times accepted directly: `today`/`tomorrow`/`this Friday`/`2 pm today` are resolved against the system clock at run time
-- Machine-readable: append `--json` to any command for clean JSON output, ready for other programs to consume
-- Reliably parseable output: event IDs are always marked with 🆔 (see "How It Works"), so agents and scripts can always find the events
+## Quick start
 
-## Quick Start
-
-Put the whole project directory into your agent's skills directory (e.g. Hermes, Claude Code), and the agent can manage your calendar for you. You can also run the commands manually in a terminal:
+Place the complete project folder in your agent's skill directory, or run it directly with Python 3.10+. [SKILL.md](SKILL.md) is the agent entrypoint.
 
 ```bash
-# First use: sign in. The terminal shows a code;
-# open microsoft.com/link in your browser and enter it
+# Local helpers: no calendar access or sign-in required.
+python scripts/outlook_cal.py context --timezone Asia/Shanghai --json
+python scripts/outlook_cal.py date --base 2026-09-07 --days 4 --json
+
+# Sign in for calendar commands; follow the displayed device-code instructions.
 python scripts/outlook_setup.py
 
-# See the next 7 days
-python scripts/outlook_cal.py list --days 7
-
-# Add an event: title, start time, end time, optional reminder (minutes before)
-python scripts/outlook_cal.py add "Weekly meeting" "2026-08-10 09:00" "2026-08-10 10:00" --remind 10
+# These dates are examples; replace them with your intended absolute dates.
+python scripts/outlook_cal.py list --from 2026-09-09 --days 7 --timezone Asia/Shanghai --json
+python scripts/outlook_cal.py add "Planning" "2026-09-11 15:00" "2026-09-11 15:30" --remind 10 --timezone Asia/Shanghai --json
+python scripts/outlook_cal.py free 2026-09-11 --from 14:00 --to 17:00 --timezone Asia/Shanghai --json
 ```
 
-Dependencies - `requests`, `msal`, `tzdata` - are auto-installed on first run; no manual install needed. After authenticating once, the login renews automatically; credentials are stored at `~/.outlook_cal_token.json` in your home directory.
+Login and calendar commands install missing `requests`, `msal`, and `tzdata` dependencies automatically. Offline helpers do not install packages; when regional timezone data is unavailable, install it with the same interpreter: `python -m pip install tzdata`. Device-code sign-in stores credentials at `~/.outlook_cal_token.json`; the tool renews the login when possible. See [configuration](references/configuration.md) for account and Azure app setup.
 
-## Usage Examples
+## Responsibilities
 
-```
-$ python scripts/outlook_cal.py list --days 3
-📅 Mon, Aug 10
-    🕐 08/10 09:00 - 08/10 10:00  Weekly meeting 🔁Weekly on Monday [Work]
-    🆔 AAMkAD...
+| AI agent | Python backend |
+|---|---|
+| Interpret relative language and conversation context | Return current clock/timezone and compute explicit date offsets |
+| Select the event, requested fields, and occurrence/series scope | Validate IDs supplied to operations, input formats, ranges, and recurrence structure |
+| Resolve material ambiguity and reuse existing authorization | Convert named timezones and all-day boundaries |
+| Normalize absolute values and retain them for retries | Authenticate, paginate API results, apply retry rules, and return JSON |
+| Verify the requested result and report it accurately | Return server data and structured errors |
 
-$ python scripts/outlook_cal.py free "2026-08-14" --from 09:00 --to 18:00
-📅 Fri, Aug 14: free 09:00-10:00, 14:00-18:00
+For example, “Am I free this Friday 14:00–17:00?” is still valid conversational input. The agent reads `context`, adds four days to its Monday `week_start`, then passes the resulting date to `free`. The backend itself rejects strings such as `this friday` or `今天下午2点`.
 
-$ python scripts/outlook_cal.py delete <ID> -y
-🗑️ Removed this occurrence "Weekly Meeting" (other occurrences kept)
-```
+## Explicit command contract
 
-The 🆔 line in the output is that event's ID; every modify, delete, and move operation takes it from there.
+- Dates are `YYYY-MM-DD`; timed values are `YYYY-MM-DD HH:MM` or `YYYY-MM-DDTHH:MM`, with zero padding. Timezone is supplied separately using `--timezone` with an IANA or Windows name; absent that option, local detection applies.
+- `list` requires `--from` or a creation filter. `free` requires a date. The old `today`/`tomorrow`/`week` commands and `--past` have been removed.
+- Timed creation requires both start and end; all-day creation requires `--all-day`. Converting between types requires explicit start and end.
+- Recurrence uses a Graph pattern JSON object through `--repeat` or `--repeat-file`. Natural-language rules are no longer parsed. Use the file form to avoid shell quoting problems.
+- `--json` yields one JSON value on stdout; warnings and diagnostics go to stderr. Decode JSON to recover Unicode. `--lang zh|en` changes human text, not field names.
+- Timed operations use the effective timezone. All-day dates use the mailbox timezone when accessible, otherwise the effective timezone, to preserve their calendar-date meaning in Outlook.
 
-## How It Works
-
-The overall design idea is simple: **output is always predictable and verifiable** - machines never misread it, and humans never get confused. Three pillars support this goal:
-
-- **Official Microsoft API - equivalent to doing it by hand**: the program calls Microsoft Graph API, Microsoft's official interface for the Outlook calendar. The effect is identical to operating Outlook yourself, and changes sync in real time to phone, computer, and web. Sign-in uses the device-code flow: the first run shows you a code, open microsoft.com/link in your browser and enter it; afterwards the login renews automatically via Microsoft's auth library (`msal`). **No local service runs in the background**
-- **Timezones handled automatically, following your computer**: all times are parsed, displayed, and converted in the computer's local timezone (official Windows timezone names and IANA names are fully mapped); no manual timezone conversion is needed. Set the `TZ` environment variable to override when detection fails
-- **All-day events are written in the mailbox's preferred timezone**: they never span two days in Outlook even when the computer's timezone differs from the account's (after upgrading, re-run `python outlook_setup.py` once to grant the new permission)
-- **Output follows a fixed "protocol" - machines never misread it**: the output format is fixed - every event's ID always appears on the line starting with 🆔 (e.g. `AAMkAD...` in the examples), and times, locations, categories, etc. have fixed formats and markers. These markers (emoji anchors) are language-independent - Chinese and English output share the same set - so agents and scripts parse reliably in any language. For programmatic use (e.g. your own scripts), append `--json` for clean JSON output with no human-oriented text mixed in
-
-## Development
-
-For development, start with [DEVELOPMENT.md](DEVELOPMENT.md) — it covers the full output protocol, key design decisions, i18n conventions, and testing.
+Read the [command reference](references/commands.md) and [recurrence guide](references/recurring-events.md) for complete options. [DEVELOPMENT.md](DEVELOPMENT.md) describes implementation boundaries and offline tests.

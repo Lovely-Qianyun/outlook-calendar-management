@@ -1,54 +1,35 @@
-# 实机集成演练（可选）
+# 可选的真实日历冒烟测试
 
-drill.sh / drill-en.sh 是对真实 Microsoft Graph 的 106 项行为断言，用于覆盖单元测试无法验证的部分。
+`drill.py` 通过日历 CLI 调用 Microsoft Graph。它创建两个带唯一主题的测试日程（其中一个是重复两次的系列），读取和修改它们，最后只删除本次创建成功返回的 ID。脚本不会清空账号，也不会删除搜索结果中的其他日程。建议使用专用测试账号。
 
-## ⚠️ 毁灭性警告（agent 必读）
+日常运行 `python -m pytest tests/` 全部是离线测试，也包含该脚本的模拟客户端测试。不要把真实冒烟测试放进日常自动验证流程。
 
-> **任何 agent（AI 助手）在运行 drill.sh / drill-en.sh 之前，必须向用户明确说明以下后果，并获得用户明确同意后方可执行：**
->
-> 1. 脚本开头的"基线清理"会**删除 ±400 天窗口内的所有日程**，包括**全部定期系列主事件**——这是**不可恢复的永久删除**，没有回收站
-> 2. 若当前认证的是个人真实日历，运行后**个人日程将全部消失**
-> 3. 脚本仅允许对**专用测试账户**运行；指向真实账户将造成严重事故
-> 4. 脚本设有**双重防呆校验**：① 必须显式传入 `confirm` 参数；② 必须指定测试账户邮箱，且与当前连接账户一致（脚本通过 `status` 实时校验），不一致时直接拒绝执行
+## 显式运行
 
-## 警告
+先连接准备使用的测试账号。如需保留已有连接，请在同一终端中先将 `OCAL_TOKEN_PATH` 设为独立的令牌文件路径，再登录并测试；详见[配置说明](../../references/configuration.zh-CN.md)。测试脚本的子进程会继承该设置。
 
-- **必须使用专用测试账户**。脚本开头的基线清理会删除 ±400 天窗口内的所有日程及全部定期系列主事件，指向个人真实日历将造成事故
-- 脚本会真实写入与删除日程，演练后日历中残留测试数据属正常现象
-- 需要网络连接，无法在 CI 中运行；日常开发以 `python -m pytest tests/` 为准
-
-## 用法
-
-```bash
-python outlook_setup.py   # 先用测试账户完成认证，token 存在 ~/.outlook_cal_token.json
-bash tests/integration/drill.sh confirm zrancalendar@outlook.com     # 中文输出版（第二个参数 = 测试账户）
-bash tests/integration/drill-en.sh confirm zrancalendar@outlook.com  # 英文输出版（OCAL_LANG=en）
-# 或：TEST_ACCOUNT=zrancalendar@outlook.com bash tests/integration/drill.sh confirm
+```text
+python scripts/outlook_setup.py
+python tests/integration/drill.py --account test@example.com --confirm
+python tests/integration/drill.py --account test@example.com --confirm --lang zh
 ```
 
-账户校验说明：脚本启动后会先执行 `--json status`，当当前连接账户与指定测试账户不一致（含未连接）时，拒绝执行任何删除操作。这是 `confirm` 之外的机器级防护——即使误用真实账户的 token，也不会删除真实日程。
+将 `test@example.com` 替换为当前连接的日历账号。写入必须同时提供 `--account` 和 `--confirm`。脚本在每次写入和每次清理删除前，通过 `status --json` 核对实际账号；账号不匹配就停止该操作。`--lang` 决定底层 CLI 的输出语言，最终报告始终使用相同的 JSON 字段。
 
-两个脚本的 106 项断言一一对应，仅期望文案不同。通过标准为 106/106。
+所有命令都以 Python 子进程参数列表运行，Windows 不需要 Bash。日期使用明确值，定时日程同时提供起止时间，重复规则使用 JSON，时区统一为 UTC。测试日期从当前 UTC 日期之后 30 天开始。固定的三天查询窗口覆盖预期的两个重复日期及额外一天，用于发现多余实例。测试日程标为空闲，主题带唯一的 `ocal-smoke-...-` 前缀。
 
-## 覆盖范围（106 项）
+## 覆盖内容和结果
 
-| 分组 | 内容 | 项数 |
-|------|------|------|
-| 0. 账户守卫 + 基线清理 | 账户一致性校验；先删系列主事件再删单次（_get_all 翻页）；清理后窗口为空 | 1 |
-| 1. 时间解析边界 | 补零/缺位宽松、越界与自然语言报错、end<start | 11 |
-| 2. remind 边界 | 0/负数/全天超上限 | 3 |
-| 3. 重复规则边界 | 全部规则写法 + 非法输入 | 12 |
-| 4. 冲突检测边界 | 重叠/相接/free/全天 | 5 |
-| 5. update 边界 | 空字段/清空/时间校验/转全天报错 | 8 |
-| 6. 删除边界 | 不存在 ID、EOF 取消 | 2 |
-| 7. 定期系列深度 | 第 N 次/例外/next/删单次/删系列 | 9 |
-| 8. free/命令边界 | 非法窗口/正常输出/多天 | 6 |
-| 9. --json 边界 | 纯净 JSON/错误结构化/stderr | 4 |
-| 10. 其他边界 | emoji/长备注/多类别/importance | 5 |
-| 11. move 专项 | --days/--to/0 天/参数冲突/全天/系列警告/跨界报错 | 9 |
-| 12. 多天全天/快捷命令/筛选 | add+update 多天全天、多天全天第 2 天冲突告警、today/tomorrow/week、--created-after+--reminders、private/importance 显示 | 12 |
-| 13. v1.2.0 行为回归 | 转时段 remind 分钟语义、已取消单次不占空闲、delete 单次文案、解除定期 | 5 |
-| 14. TZ 环境变量覆盖 | TZ=Asia/Hong_Kong、TZ=America/Phoenix 下真实 Graph 查询（Windows 官方名映射 + Prefer 头被接受） | 2 |
-| 15. DST 切换日（TZ=America/New_York） | 回拨日事件创建与读回、跳变日不存在时间的警告、跨 DST 的 free/list | 5 |
-| 16. 邮箱时区对齐 | status 提示邮箱/本机时区不同；全天日程按邮箱首选时区写入（本机被 TZ 覆盖为美东） | 2 |
-| 17. 相对时间 | add 用"今天/明天"相对时间，创建的日程落在正确的日期 | 4 |
+脚本检查 `context`、确定性的 `date` 日期加减、定时日程 `add` 和 `read`、主题 `update`、按明确日期 `move`、明确时间窗口的 `list`、`free` 返回结构，以及每日重复规则创建。它核对日程读取结果、系列规则，以及恰好两个展开实例的起止时间。清理后查询固定测试窗口，确认已知日程 ID 及以其为 `seriesMasterId` 的实例均已消失。详细参数校验、夏令时边界、其他重复模式、空闲时段计算正确性和错误情况由离线测试覆盖。
+
+退出码为 0 且报告 `"ok": true` 表示检查和清理均成功。失败报告包括：
+
+- `errors`：失败的检查或清理操作。
+- `remaining_ids`：本次创建后，尚未确认删除成功的 ID。
+- `deletion_checks`：删除后的回查状态：`absent`（窗口内已消失）、`present`（仍存在）或 `unverified`（未能核实）。
+- `unknown_create_subjects`：创建请求未返回可用 ID 的唯一主题；这些请求的结果可能未知。
+- `unknown_create_checks`：在固定窗口内按完整主题只读回查的结果：`observed`（查到匹配）、`not_found`（未查到）或 `unverified`（未能核实），并附匹配 ID 和时间。查得的 ID 不会加入自动清理。
+- `test_window`：上述检查使用的固定日期范围和时区。
+- `subject_prefix`：供人工检查的本次运行标识。
+
+检查失败后仍会执行清理。清理只处理本次创建返回的 ID，并在每次删除和诊断查询前重新核对账号。脚本不会自动重试超时、响应格式错误等结果不明的写入；删除后回查失败也不会再次发起删除。创建未返回 ID 时，会按完整主题只读查询并报告观察结果，不重发创建，也不删除查得的 ID。`not_found` 只表示固定窗口内未查到，不能证明写入从未发生。再次运行前，请在预期账号中检查报告中的未解决项目。强制终止进程可能导致清理无法执行，可以用唯一主题前缀查找遗留的测试数据。
