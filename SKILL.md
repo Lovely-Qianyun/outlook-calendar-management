@@ -8,62 +8,72 @@ metadata:
 
 # Outlook Calendar Management
 
-Manage the connected account's default Outlook calendar. Interpret the user's language and context, then pass explicit values to the bundled Python CLI. The backend validates dates and recurrence patterns, handles timezone conversion, and calls Microsoft Graph; it does not interpret natural-language dates or recurrence rules.
+Manage the connected account's default Outlook calendar: queries, creation, edits, moves, deletion, recurring events, and free-time searches. Resolve the user's request in context, then call the bundled Python CLI with explicit parameters.
+
+## Requests and expected results
+
+Assume the current date is **2026-09-28 in Asia/Shanghai**:
+
+| Request | Operation | Verify and report |
+|---|---|---|
+| “What's on tomorrow?” | Query `list --from 2026-09-29 --days 1 --json`. | That date's event titles and times. |
+| “Add a half-hour meeting this Friday at 15:00, with a 10-minute reminder.” | Add four days to Monday to get October 2; create 15:00–15:30 with `--remind 10`. | The new event's date, times, and reminder. |
+| “Move the planning event I added yesterday to today.” | Find it by creation date, then `move <ID> --to 2026-09-28 --json`. | Its previous and new scheduled dates, with the time slot preserved. |
+| “Am I free this Friday 14:00–17:00?” | Query `free 2026-10-02 --from 14:00 --to 17:00 --json`. | The returned available intervals. |
+
+Calculate actual dates from current context; also pass the resolved `--timezone` to these commands.
 
 ## Run the CLI
 
-Resolve paths relative to this skill directory. Use the available Python 3.10+ interpreter (`python` or `python3`):
+Resolve paths relative to this skill directory and use Python 3.10+:
 
 ```bash
-python "<skill-directory>/scripts/outlook_cal.py" context --json --lang en
+python "<skill-directory>/scripts/outlook_cal.py" context --timezone Asia/Shanghai --json --lang en
 ```
 
-Examples below omit this prefix. Prefer `--json`; JSON keys do not change with language. Use `--lang zh` for Chinese conversations and `--lang en` otherwise; respond in the user's language. `--json`, `--lang`, and `--timezone` work before or after any command.
+The following examples omit the interpreter and script prefix. Prefer `--json` and read decoded fields. Use `--lang zh` for Chinese conversations and `--lang en` otherwise; reply in the user's language. These options and `--timezone` work before or after the command.
 
-For first connection or account changes, read [configuration.md](references/configuration.md). Authentication uses `scripts/outlook_setup.py`. For an isolated test login, follow the separate `OCAL_TOKEN_PATH` configuration and verify the intended account before writes. Login and calendar commands install missing requests/msal/tzdata dependencies automatically. `context` and `date` do not access the calendar, authenticate, or install packages; named regional timezones need system timezone data or tzdata.
+For first connection or account changes, follow [configuration](references/configuration.md), run `scripts/outlook_setup.py`, and check the account with `status --json`. Calendar commands need network access and sign-in; missing requests, msal, and tzdata are installed automatically. Local `context` and `date` work without sign-in; regional timezones need system timezone data or installed tzdata.
 
-## Resolve intent before execution
+## 1. Resolve dates, target, and scope
 
-- When resolving relative dates, get `context --json` unless fresh current time and effective timezone are already available. It returns `now`, `today`, `timezone`, `utc_offset`, lowercase English `weekday`, and Monday's `week_start`. If the user specifies a timezone, pass it to `context --timezone "Area/City" --json`. Reuse that named timezone explicitly in subsequent calendar commands; UTC offsets alone do not describe daylight-saving rules.
-- Turn relative language into a precise date using `date --base YYYY-MM-DD --days N --json` or Python `datetime`/`calendar` arithmetic. The helper adds signed calendar days without reading a clock. For this Friday, add 4 to `context.week_start`; for next Monday, add 7. Resolve ambiguous intent from context or ask only for missing information that affects the operation.
-- Calendar inputs accept only zero-padded `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, or `YYYY-MM-DDTHH:MM`; date-only arguments reject times. Supply timezone separately. Timed creation needs both start and end; all-day creation requires `--all-day`. Do not invent a duration or turn a missing time into an all-day event.
-- Before a write, retain the normalized target, absolute dates/times, timezone, and requested fields. Reuse these values for verification and any retry, including across midnight; do not reinterpret the original relative phrase.
+- Relative dates require a current clock and effective timezone. When that context is missing or stale, call `context --json`, adding `--timezone` for a user-specified zone. It returns `now`, `today`, `timezone`, `utc_offset`, `weekday`, and Monday's `week_start`.
+- Calculate dates with `date --base YYYY-MM-DD --days N --json` or Python date arithmetic. This Friday is `week_start` plus four days. Reuse the same named timezone in subsequent commands.
+- CLI dates are zero-padded `YYYY-MM-DD`; timed values are `YYYY-MM-DD HH:MM` or `YYYY-MM-DDTHH:MM`, with timezone supplied separately. Timed creation requires start and end; all-day creation uses `--all-day`. Resolve missing bounds, duration, or all-day intent from context or necessary clarification before writing.
+- Use result `id` / `seriesMasterId` values. Before edits or deletion, confirm relevant existing fields through `read` or fresh complete results; resolve multiple candidates and occurrence versus series scope. Existing authorization for the identified action and scope remains valid.
+- Retain the connected account, target, scope, absolute dates/times, timezone, and requested fields before writing, and reuse them during verification and recovery.
 
-## Choose and carry out the operation
+## 2. Carry out the operation
 
 | Task | Command |
 |---|---|
-| Events on a date / date range | `list --from YYYY-MM-DD --days N --json` |
-| Filter that range | Add `--search "term"`, `--category "name"`, or `--reminders` |
-| Events created in a date interval | `list --created-after YYYY-MM-DD --created-before YYYY-MM-DD --json` |
-| Details / next recurring occurrence | `read <ID>` / `next <ID>` |
+| Query scheduled dates | `list --from YYYY-MM-DD --days N --json` |
+| Filter that result | Add `--search "term"`, `--category "name"`, or `--reminders` |
+| Find by creation date | `list --created-after YYYY-MM-DD --created-before YYYY-MM-DD --json` |
+| Details / next occurrence | `read <ID>` / `next <ID>` |
 | Create / edit / move / delete | `add` / `update` / `move` / `delete` |
-| Free slots / connection state | `free YYYY-MM-DD --from HH:MM --to HH:MM` / `status` |
+| Free time | `free YYYY-MM-DD --from HH:MM --to HH:MM --json` |
 
-`list` requires an explicit `--from` or `--created-after`. Its `--days N` spans N calendar dates with an exclusive end at the next midnight. Creation filters are independent of scheduled dates; `--created-before` is exclusive. For an unspecified schedule range, a reasonable initial query is seven days from `context.today`; state the range when reporting it. `--summary` gives daily counts only, so use normal JSON for titles and times.
+A scheduled-date query spans N calendar dates, ending at the exclusive midnight after the final date. Creation filters also exclude their `--created-before` boundary. For an unspecified query range, an initial seven days from `context.today` is reasonable; state that range in the report. Use normal lists for titles and times; `--summary` returns daily counts only.
 
-Use returned `id` and `seriesMasterId` values. Before editing or deleting, obtain the relevant existing fields through `read` or reuse fresh complete results. Resolve multiple matches and distinguish one occurrence from the whole recurring series. Existing authorization for an identified target and scope remains valid; `--json`/`-y` only skip CLI prompts. Prefer an explicit ID after identifying the target; `--search` is a convenience with a bounded search window.
+Timed operations use the selected timezone. All-day writes use the mailbox timezone when available, otherwise the selected timezone. All-day end dates are inclusive; converting between timed and all-day events requires both new bounds.
 
-After a write, read back once and verify the requested fields. After deletion, query the relevant window and confirm absence. Report actual before/after values. For an uncertain write, check server state before resubmitting the frozen request; a failed verification is not evidence that the write failed. Retry a transient read once; diagnose authentication and permission errors with `status` and [troubleshooting.md](references/troubleshooting.md). If recovery fails, explain what remains unresolved.
+For recurring operations, read [recurring events](references/recurring-events.md). Supply a Graph pattern JSON file; target the master for rule changes and explicitly supply the end condition to retain an existing cutoff or count. Series rule changes can reset individually changed or deleted occurrences; explain that effect before the operation.
 
-## Examples of normalization
+`--json` and applicable commands' `-y` skip terminal confirmation; establish the requested target and scope before executing. The `--search` shortcut covers the past seven through the next thirty days. For other windows, use `list` and then pass the ID.
 
-These dates are hypothetical: assume `context` reports **2026-09-09, Asia/Shanghai**, with `week_start` **2026-09-07**. Derive real dates from the current context rather than copying these values.
+## 3. Verify and deliver the result
 
-- **"Move what I added yesterday to today."** Calculate yesterday with `date --base 2026-09-09 --days -1 --json`. Find candidates using `list --created-after 2026-09-08 --created-before 2026-09-09 --timezone Asia/Shanghai --json`, then identify the event and use `move <ID> --to 2026-09-09 --timezone Asia/Shanghai --json`. Its original scheduled date may be in the future; creation date does not determine the move offset.
-- **"Add a half-hour meeting this Friday at 15:00, remind me 10 minutes before."** Calculate Friday with `date --base 2026-09-07 --days 4 --json`, then use `add "Meeting" "2026-09-11 15:00" "2026-09-11 15:30" --remind 10 --timezone Asia/Shanghai --json`.
-- **"Am I free this Friday 14:00–17:00?"** After the same date calculation, use `free 2026-09-11 --from 14:00 --to 17:00 --timezone Asia/Shanghai --json`.
-- **"Change the weekly sync to Wednesday."** Establish occurrence versus series scope. For a series rule, read [recurring-events.md](references/recurring-events.md), construct a Graph pattern JSON file, and use `update <seriesMasterId> --repeat-file <pattern-file> --timezone <resolved-zone> --json`. Preserve or intentionally change the existing end condition; explain the effect on exceptions before applying an authorized series change.
+After creation, update, or move, read back once and verify the requested fields. Verify deletion in the same confirmed account, using the retained target and scope:
 
-## Output and references
+- Check a successful delete response's `deleted` ID and `series` flag against the intended target: the occurrence ID for one occurrence, or the master ID for the whole series. A mismatch needs investigation before further writes.
+- For a single event or occurrence, query its scheduled date window and check the target ID's absence. For a whole series, also `read` the retained master ID and require an error with `code: event_not_found` and `http_status: 404`. An empty window alone does not establish series deletion; authentication, permission, or network errors leave verification unresolved.
+- A failed verification does not authorize another delete. For an uncertain delete without a success response, use the retained target and scope with the same read-only checks and report only what they establish.
 
-In JSON operation mode stdout contains one JSON value; diagnostics go to stderr. Check the exit code: errors use `{"error": ..., "exit": 1}`; disconnected `status` returns its connection object with `connected: false`. `--help` remains text. Parse decoded JSON, including Unicode escapes. For free time, use JSON because human output without listed slots may mean entirely free or entirely busy.
+For a timeout or uncertain write, inspect the retained ID, or locate creation candidates in the intended date window and compare the requested fields. A uniquely attributable match with the expected fields establishes the requested result; stop writing. Zero matches, multiple candidates, partial matches, or failed reads leave the outcome uncertain. Stop automatic writes and explain what is known. Retry only with positive evidence that the request was never submitted or was rejected before execution, after resolving the cause and rechecking the authorized target; reuse the fixed parameters and allow one agent-level retry. Recovery details are in [troubleshooting](references/troubleshooting.md#uncertain-writes). Retry a transient read once; if it still fails, report what could not be verified.
 
-| Read when | Reference |
-|---|---|
-| Parameters, explicit time formats, reminders, query boundaries, or JSON shapes | [commands.md](references/commands.md) |
-| Recurrence pattern fields, end conditions, occurrences, or whole series | [recurring-events.md](references/recurring-events.md) |
-| Connecting, switching accounts, or Azure app setup | [configuration.md](references/configuration.md) |
-| Authentication, installation, timezone errors, or unexpected results | [troubleshooting.md](references/troubleshooting.md) |
+Report the actual outcome, including relevant before/after values for changes and any unresolved verification. Calendar changes are saved in Outlook; query results appear in the reply. Save JSON to a user-specified location when a file is requested.
 
-Timed events use the selected effective timezone. All-day dates are written in the mailbox timezone when available, falling back to the effective timezone; this preserves their calendar dates in Outlook. Investigate timezone/permission discrepancies before repeating a write.
+In JSON operation mode stdout is one JSON value and diagnostics go to stderr. Check the exit code and error fields `error` and `exit`, plus `code` and `http_status` when available. `outcome_unknown: true` marks an uncertain write; its absence does not establish retry safety; disconnected `status` returns `connected: false`. Free-time JSON lists intervals by date: an empty array means no free time in the queried window, and the full interval means entirely free.
+
+Full parameters, output structures, and examples are in the [command reference](references/commands.md).

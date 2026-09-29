@@ -1093,3 +1093,27 @@ def test_dst_invalid_or_ambiguous_write_rejected(monkeypatch, command, start, en
     with pytest.raises(CalError):
         getattr(ev, "cmd_" + command)(args)
     assert "PATCH" not in methods
+
+
+@pytest.mark.parametrize("kind,whole_series,expected_id,expected_series", [
+    ("single", False, "TARGET", False),
+    ("occurrence", False, "TARGET", False),
+    ("occurrence", True, "MASTER", True),
+    ("master", False, "TARGET", True),
+])
+def test_delete_json_identifies_actual_target_and_scope(capsys, monkeypatch, kind, whole_series,
+                                                        expected_id, expected_series):
+    event = _event(id="TARGET", seriesMasterId="MASTER" if kind == "occurrence" else None,
+                   recurrence={"pattern": {"type": "daily", "interval": 1}}
+                   if kind == "master" else None)
+    deleted = []
+    def call(method, endpoint, token, data=None, prefer_immutable=False):
+        if method == "GET":
+            return event
+        deleted.append(endpoint)
+        return None
+    _mock_net(monkeypatch, call_fn=call)
+    assert ev.cmd_delete(_args(event_id="TARGET", json=True, yes=False, series=whole_series)) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["deleted"] == expected_id and result["series"] is expected_series
+    assert deleted == [f"/me/events/{expected_id}"]

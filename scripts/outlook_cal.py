@@ -68,7 +68,7 @@ def main():
     except CalError as e:
         if _json_requested(sys.argv[1:]):
             # ASCII 转义保留 Unicode 数据，避免 Windows 窄编码管道替换字符。
-            print(json.dumps({"error": str(e), "exit": 1}, ensure_ascii=True))
+            print(json.dumps(e.to_dict(), ensure_ascii=True))
             return 1
         raise
 

@@ -327,3 +327,45 @@ class TestJsonMode:
         cap = capsys.readouterr()
         json.loads(cap.out)  # 纯净可解析
         assert "❌" not in cap.out
+
+
+@pytest.mark.parametrize("lang", ["zh", "en"])
+@pytest.mark.parametrize("status,graph_code,expected", [
+    (404, "ErrorItemNotFound", "event_not_found"),
+    (403, "ErrorAccessDenied", "permission_denied"),
+    (401, "InvalidAuthenticationToken", "authentication_required"),
+    (404, "ResourceNotFound", "graph_error"),
+    (403, "ErrorItemNotFound", "permission_denied"),
+])
+def test_read_recovery_codes_are_language_independent(monkeypatch, capsys, lang, status, graph_code, expected):
+    import ocal_graph
+    from test_graph import Resp
+    monkeypatch.setattr(ev, "get_token", lambda: "tk")
+    monkeypatch.setattr(ev, "_call", ocal_graph._call)
+    monkeypatch.setattr(ocal_graph.requests, "request", lambda *a, **k: Resp(
+        status=status, payload={"error": {"code": graph_code, "message": "failure"}}))
+    assert _run_cli(monkeypatch, ["read", "MASTER", "--json", "--lang", lang]) == 1
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert result["exit"] == 1 and result["error"]
+    assert result["code"] == expected and result["http_status"] == status
+    assert "outcome_unknown" not in result
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("lang", ["zh", "en"])
+def test_create_timeout_exposes_unknown_outcome_in_cli(monkeypatch, capsys, lang):
+    import ocal_graph
+    calls = []
+    def request(*args, **kwargs):
+        calls.append(args)
+        raise ocal_graph.requests.exceptions.Timeout("lost response")
+    monkeypatch.setattr(ev, "get_token", lambda: "tk")
+    monkeypatch.setattr(ev, "_call", ocal_graph._call)
+    monkeypatch.setattr(ocal_graph.requests, "request", request)
+    result_code = _run_cli(monkeypatch, ["add", "Meeting", "2026-10-01 15:00", "2026-10-01 15:30",
+                                        "--force", "--json", "--lang", lang])
+    assert result_code == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["code"] == "network_error" and result["outcome_unknown"] is True
+    assert len(calls) == 1

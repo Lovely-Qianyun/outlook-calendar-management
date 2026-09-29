@@ -1,54 +1,99 @@
 🌐 [English](README.md) | 中文
 
 <p align="center">
-  <img src="./icon/appIcon.png" alt="App Logo" width="20%">
+  <img src="./icon/appIcon.png" alt="Outlook 日历助手图标" width="20%">
 </p>
 
 # Outlook 日历助手
 
-通过与 AI 助手对话管理 Outlook 日历。模型负责理解请求，本地 Python CLI 校验明确参数并调用 Microsoft Graph。支持个人 outlook.com 和 Microsoft 365 账户、定期日程、提醒、空闲查询以及中英文输出，无需 MCP 服务或后台常驻进程。
+通过与 AI 助手对话，或直接在终端运行命令，管理 Outlook 日历。适合查看近期安排、寻找会议空档、调整日程日期，以及维护定期会议和提醒。操作对象是已连接账户的默认日历。
 
-**3.0.0** 将语言理解与执行分开：CLI 只接受绝对日期和结构化重复规则。本地 `context`、`date` 工具提供当前时钟/时区和确定的日期运算，让模型在写入前确定请求，并在重试时复用相同参数。
+支持个人 Outlook.com 和 Microsoft 365 账户，提供中英文输出。项目包含一份供 AI 助手使用的 skill，以及通过 Microsoft Graph 读写日历的本地 Python 命令行工具。
+
+## 能做什么
+
+| 你提出的需求 | 如何处理 | 得到的结果 |
+|---|---|---|
+| “明天有哪些会？” | 助手按你的时区确定明天的日期，查询当天日历。 | 匹配的会议标题和时间。 |
+| “本周五 15:00 加一个半小时的计划讨论，提前十分钟提醒。” | 助手确定日期，创建 15:00–15:30 的日程。 | Outlook 中带提醒的会议。 |
+| “把计划讨论挪到 9 月 30 日。” | 找到目标日程，修改发生日期。 | 同一日程移到新日期，保留原时段和时长。 |
+| “每周三 09:00–09:30，共八次。” | 助手整理每周重复规则和次数。 | Outlook 中的定期系列。 |
+| “9 月 30 日 14:00 到 17:00 有空吗？” | 从指定窗口中扣除已占用时间。 | 可用时段，例如 14:00–15:00、15:30–17:00。 |
+
+还可以按标题、地点、备注、类别或创建日期查找日程，修改详情，删除单次或整个系列，创建全天日程，以及查询定期日程的下一次出现。
 
 ## 快速开始
 
-将完整项目目录放入 Agent 的 skill 目录，或用 Python 3.10+ 直接运行。[SKILL.zh-CN.md](SKILL.zh-CN.md) 是中文 Agent 入口。
+### 1. 获取项目并安装依赖
+
+需要 **Python 3.10+**、Outlook 账户，以及用于登录和操作日历的网络连接。对话使用还需要能够加载 skill 并运行本地 Python 命令的 AI 助手；模型由该助手提供，本仓库无需下载模型或准备输入数据集。
+
+克隆仓库，或下载并解压项目，然后在项目根目录打开终端：
 
 ```bash
-# 本地工具：不访问日历，不要求登录。
-python scripts/outlook_cal.py context --timezone Asia/Shanghai --json
-python scripts/outlook_cal.py date --base 2026-09-07 --days 4 --json
-
-# 日历命令先登录，按提示完成设备码认证。
-python scripts/outlook_setup.py
-
-# 日期仅为示例，请替换为实际需要的绝对日期。
-python scripts/outlook_cal.py list --from 2026-09-09 --days 7 --timezone Asia/Shanghai --json
-python scripts/outlook_cal.py add "计划讨论" "2026-09-11 15:00" "2026-09-11 15:30" --remind 10 --timezone Asia/Shanghai --json
-python scripts/outlook_cal.py free 2026-09-11 --from 14:00 --to 17:00 --timezone Asia/Shanghai --json
+git clone https://github.com/Lovely-Qianyun/outlook-calendar-management.git
+cd outlook-calendar-management
+python -m pip install requests msal tzdata
 ```
 
-登录及日历命令会自动安装缺失的 `requests`、`msal`、`tzdata`。离线工具不安装依赖；地区时区数据不可用时，用同一解释器运行 `python -m pip install tzdata`。设备码登录将凭据存放在 `~/.outlook_cal_token.json`，工具在可能时自动续期。账户与 Azure 应用设置见[连接配置](references/configuration.zh-CN.md)。
+如果你的 Python 3.10+ 命令是 `python3`，将示例中的 `python` 换成 `python3`。登录和日历命令也会自动安装缺失的依赖。
 
-## 分工
+### 2. 连接日历
 
-| 模型 | Python 后端 |
+```bash
+python scripts/outlook_setup.py
+python scripts/outlook_cal.py status --json
+```
+
+按终端提示完成设备码登录。检查 `status` 中的 `connected: true` 和账户信息，确认连接的是要操作的账户。工具申请日历读写和邮箱时区读取权限；组织账户可能需要管理员批准，详见[连接配置](references/configuration.zh-CN.md)。
+
+### 3. 先试一次查询
+
+将示例日期和时区替换为自己的目标值。第一条命令查询从 9 月 28 日开始的七个自然日：
+
+```bash
+python scripts/outlook_cal.py list --from 2026-09-28 --days 7 --timezone Asia/Shanghai --json
+python scripts/outlook_cal.py free 2026-09-30 --from 14:00 --to 17:00 --timezone Asia/Shanghai --json
+```
+
+假设当天下午只有 15:00–15:30 被占用，第二条命令会返回：
+
+```json
+{"2026-09-30": [["14:00", "15:00"], ["15:30", "17:00"]]}
+```
+
+### 4. 创建日程，或交给助手操作
+
+下面的命令会**向已连接日历写入真实日程**，运行前请核对日期、时区和账户。时间重叠时会显示提醒，但仍会创建日程。
+
+```bash
+python scripts/outlook_cal.py add "计划讨论" "2026-09-30 15:00" "2026-09-30 15:30" --remind 10 --timezone Asia/Shanghai --json
+```
+
+返回结果包含新日程的 `id`、标题、起止时间和提醒字段。将返回的 ID 传给 `read` 可以查看详情，参数见[命令参考](references/commands.zh-CN.md)。
+
+如需通过对话使用，将**完整项目文件夹**放入助手的 skill 目录，并加载 [SKILL.md](SKILL.md)；中文说明见 [SKILL.zh-CN.md](SKILL.zh-CN.md)。然后可以说：“帮我看看 Outlook 日历明天有什么安排。”助手会把请求整理为具体日期和命令参数。
+
+## 结果在哪里
+
+- **日历变更**保存在已连接账户的默认 Outlook 日历中，可在登录该账户的 Outlook 客户端查看。
+- **查询结果**显示在终端或助手回复中。需要保存为本地 JSON 文件时，可以重定向输出：
+
+  ```bash
+  python scripts/outlook_cal.py list --from 2026-09-28 --days 7 --timezone Asia/Shanghai --json > events.json
+  ```
+
+  `events.json` 位于当前目录，再次使用同名文件会覆盖原内容；诊断信息单独输出到 stderr。
+- **登录凭据**默认存放在 `~/.outlook_cal_token.json`，请妥善保管。更换保存位置或切换账户见[连接配置](references/configuration.zh-CN.md)。
+
+## 继续阅读
+
+| 需要了解 | 文档 |
 |---|---|
-| 结合对话理解相对日期和自然语言 | 提供当前时钟/时区，按明确偏移计算日期 |
-| 识别日程、修改字段、单次/系列范围 | 校验操作参数、日期格式、时间范围、重复结构 |
-| 消除影响操作的歧义，复用已有授权 | 处理时区转换和全天日期边界 |
-| 固定绝对参数并在重试时复用 | 认证、接口分页、按规则重试、返回 JSON |
-| 核实用户要求的结果并准确汇报 | 返回服务端数据和结构化错误 |
+| 完整命令、参数与输出格式 | [命令参考](references/commands.zh-CN.md) |
+| 重复规则、单次与整系列操作 | [定期日程](references/recurring-events.zh-CN.md) |
+| 登录、切换账户、自有 Azure 应用 | [连接配置](references/configuration.zh-CN.md) |
+| 安装、认证与时区问题 | [故障排查](references/troubleshooting.zh-CN.md) |
+| 实现原理与离线测试 | [开发者指南](DEVELOPMENT.zh-CN.md) |
 
-例如，用户仍可说“本周五 14:00 到 17:00 有空吗”。模型读取 `context`，在周一 `week_start` 上加四天，再将计算出的日期传给 `free`；后端本身拒绝 `本周五`、`今天下午2点` 等字符串。
-
-## 明确的命令契约
-
-- 日期格式为 `YYYY-MM-DD`，带时刻为 `YYYY-MM-DD HH:MM` 或 `YYYY-MM-DDTHH:MM`，各字段补零。时区通过单独的 `--timezone` 指定 IANA 或 Windows 名称，不指定则自动探测。
-- `list` 必须给 `--from` 或创建日期筛选，`free` 必须给日期。已移除 `today`/`tomorrow`/`week` 命令及 `--past`。
-- 创建时段日程必须给开始和结束，全天日程必须加 `--all-day`。两种类型之间转换必须明确开始与结束。
-- 重复规则通过 `--repeat` 或 `--repeat-file` 传 Graph pattern JSON 对象，不再解析自然语言。文件形式可避开 shell 引号转义问题。
-- `--json` 使 stdout 只有一个 JSON 值，警告和诊断信息走 stderr；解析 JSON 后恢复 Unicode。`--lang zh|en` 改变人类提示，不改变字段名。
-- 时段操作使用有效时区。全天日程尽量按邮箱时区写入，不可用时使用有效时区，以保留 Outlook 中的日历日期含义。
-
-完整参数见[命令参考](references/commands.zh-CN.md)和[定期日程指南](references/recurring-events.zh-CN.md)，实现边界和离线测试见 [DEVELOPMENT.zh-CN.md](DEVELOPMENT.zh-CN.md)。
+使用 [MIT 许可证](LICENSE)。

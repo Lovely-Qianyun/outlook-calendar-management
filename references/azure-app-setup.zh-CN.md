@@ -1,38 +1,34 @@
-# 自带 Azure 应用注册指南
+# 使用自己的 Azure 应用
 
-> 仅当不使用**内置默认应用**、想注册自己的 Azure 应用时阅读本节；其余情况可跳过。
->
-> 背景：本工具的登录采用"设备码流程"——终端显示一个验证码，在浏览器中打开 microsoft.com/link 输入后完成授权。默认应用已内置该流程的全部配置；自带应用只需注册并提供一个 Client ID。
+需要自行管理应用注册和授权时，可以将自有应用的客户端 ID 传给登录脚本。例如，注册一个供个人 Outlook 账户使用的公共客户端，登录后即可通过同一套日历命令操作账户。常规连接可直接使用[内置应用](configuration.zh-CN.md)。
 
-## 为什么需要 Client ID
+## 注册和配置
 
-- **Client ID（应用程序 ID）**：应用在微软身份体系中的唯一标识。设备码登录仅需要此项。
-- **不需要 Tenant ID / Client Secret**：这两者仅用于"服务器后台无人值守"场景（机密客户端）。本工具采用公共客户端 + 设备码流程，任何要求填写这两项的界面均可忽略。
+需要能在 Microsoft Entra 租户中注册应用的账户或管理员协助。在 [Microsoft Entra 管理中心](https://entra.microsoft.com/)进入“应用注册”，创建应用并记录 **Application (client) ID**；账户类型按使用者选择，具体入口见[微软应用注册指南](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app)。
 
-## 注册步骤
+1. 为应用命名。仅供个人 Outlook.com 使用时，选择个人 Microsoft 账户；组织账户需要匹配的组织账户支持和管理员许可。当前登录脚本使用 `consumers` / `common` 入口，没有租户 ID 参数，组织应用配置需与此相符。
+2. 在身份验证设置中启用 **Allow public client flows（允许公共客户端流）** 并保存。本工具采用设备码流程，适用于公共客户端，参见[微软公共客户端说明](https://learn.microsoft.com/en-us/entra/identity-platform/msal-client-applications)。
+3. 在 API 权限中添加 Microsoft Graph 的**委托权限** `Calendars.ReadWrite` 和 `MailboxSettings.Read`。用途见[连接配置](configuration.zh-CN.md)。按组织策略完成所需的管理员同意。
 
-1. 打开 https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade
-2. 使用 Outlook 账户登录
-3. **新建注册** → 填写应用名称 → 账户类型选择 **"仅个人 Microsoft 帐户"**
-4. **身份验证** → 添加平台 → **"移动和桌面应用程序"** → 勾选 `https://login.microsoftonline.com/common/oauth2/nativeclient`
-5. 身份验证页底部 → **"允许公共客户端流"** → 设为 **"是"** → 保存
-6. **API 权限** → 添加权限 → Microsoft Graph → 委托权限 → 依次添加三个权限：`User.Read`、`Calendars.ReadWrite`、`MailboxSettings.Read`（各自的用途见 `configuration.zh-CN.md` 的连接步骤表）
-7. 回到 **概览** 页，复制顶部 **"应用程序(客户端) ID"**
+此登录流程使用客户端 ID 和用户交互授权，无需创建客户端密钥。
 
-## 认证
+## 登录并查看结果
 
-从项目根目录运行。
+完成[快速开始](../README.zh-CN.md#快速开始)中的依赖安装后，在项目根目录运行，将占位值替换为应用客户端 ID：
 
 ```bash
-python scripts/outlook_setup.py <你的Client ID>
+python scripts/outlook_setup.py YOUR_CLIENT_ID
+python scripts/outlook_cal.py status --json
 ```
 
-之后的流程与默认应用完全一致：脚本打印验证码 → 浏览器打开 `https://www.microsoft.com/link` 输入 → Outlook 账户授权。token 自动续期。
+按终端设备码提示完成登录。`status` 应返回 `connected: true` 及预期账户。凭据保存到 `OCAL_TOKEN_PATH` 指定位置，默认是 `~/.outlook_cal_token.json`；成功登录会替换该路径中的已有连接。
 
-## 常见失败
+## 连接失败时
 
-| 症状 | 原因与解决 |
-|------|-----------|
-| 设备码报"找不到应用" | 账户类型未选择"个人 Microsoft 帐户"，或"允许公共客户端流"未开启 |
-| 403 Forbidden | `Calendars.ReadWrite` 委托权限未添加 |
-| 验证码过期 | 重新运行 `python scripts/outlook_setup.py` 再试一次 |
+| 现象 | 检查项 |
+|---|---|
+| 找不到应用或账户类型不匹配 | 客户端 ID、应用支持的账户类型、公共客户端设置和组织限制。 |
+| 403 权限错误 | 委托权限及同意状态；日历操作需要 `Calendars.ReadWrite`，邮箱时区读取需要 `MailboxSettings.Read`。 |
+| 设备码过期 | 重新运行同一登录命令，使用新的设备码。 |
+
+其他问题见[故障排查](troubleshooting.zh-CN.md)。

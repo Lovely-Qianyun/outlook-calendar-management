@@ -1,6 +1,22 @@
 # Command Reference
 
-Run `python "<skill-directory>/scripts/outlook_cal.py" <command> [arguments]`. Examples below use the shorter `python scripts/outlook_cal.py` from the project root. Only calendar commands require sign-in; see [configuration.md](configuration.md).
+Query and change the connected account's default Outlook calendar from the command line. This page groups commands, parameters, and results by task; installation and sign-in are in the [quick start](../README.md#quick-start).
+
+## Example: find time in an afternoon
+
+Run from the project root, replacing the date and timezone with yours:
+
+```bash
+python scripts/outlook_cal.py free 2026-09-30 --from 14:00 --to 17:00 --timezone Asia/Shanghai --json
+```
+
+If only 15:00–15:30 is occupied, the output is:
+
+```json
+{"2026-09-30": [["14:00", "15:00"], ["15:30", "17:00"]]}
+```
+
+Results appear in the terminal. Append `> free.json` to save them in the current directory, replacing an existing file of that name. Calendar writes are saved in Outlook. All examples below run from the project root; use the full script path from another directory. Replace angle-bracket placeholders such as `<ID>` with actual values.
 
 ## Shared arguments and formats
 
@@ -52,8 +68,6 @@ python scripts/outlook_cal.py list --from 2026-09-07 --days 7 --search "meeting"
 python scripts/outlook_cal.py list --created-after 2026-09-08 --created-before 2026-09-09 --timezone Asia/Shanghai --json
 ```
 
-The `today`, `tomorrow`, `week` commands and `--past` option have been removed. Normalize the desired interval and use `list --from`.
-
 ### read and next
 
 `read <ID>` returns full event details, including creation time, organizer, reminder, recurrence, and series master ID where applicable. `next <ID>` finds the next occurrence of a recurring event within 365 days; ended series and non-recurring events have distinct results.
@@ -76,14 +90,14 @@ All-day: `add <subject> YYYY-MM-DD [YYYY-MM-DD] --all-day`. The optional end dat
 |---|---|
 | `-l` / `--location`, `-b` / `--body` | Location and notes |
 | `--category "Work,Important"` | Comma-separated categories |
-| `--remind N` | Timed: minutes before; all-day: days before |
+| `--remind N` | Nonnegative; timed: minutes before; all-day: days before, up to 1826 |
 | `--repeat-file <path>` or `--repeat '<JSON>'` | Validated Graph recurrence pattern; mutually exclusive |
 | `--repeat-until YYYY-MM-DD` or `--repeat-times N` | Recurrence end condition, mutually exclusive; requires a pattern |
 | `--importance low\|normal\|high`, `--private` | Importance and privacy |
 | `--busy free\|tentative\|busy\|oof\|workingElsewhere` | Availability status |
 | `--force` | Skip the conflict check |
 
-Overlaps warn without blocking creation. Invalid, nonexistent, and ambiguous DST wall-clock times are rejected. For ambiguous local times, determine the intended instant and use explicit UTC bounds with `--timezone UTC`. The end time is never inferred from an omitted duration.
+Overlaps warn without blocking creation. Invalid, nonexistent, and ambiguous DST wall-clock times are rejected. For ambiguous local times, determine the intended instant and use explicit UTC bounds with `--timezone UTC`.
 
 ```bash
 python scripts/outlook_cal.py add "Planning" "2026-09-11 15:00" "2026-09-11 15:30" --remind 10 --timezone Asia/Shanghai --json
@@ -96,7 +110,7 @@ python scripts/outlook_cal.py add "Trip" 2026-09-11 2026-09-13 --all-day --timez
 
 - Use an empty string to clear subject/location/body/categories. `--no-remind` disables reminders.
 - Partial time changes are allowed when the event type stays the same; the resulting range must remain valid.
-- Switching between timed and all-day with `--all-day`/`--no-all-day` requires **both** `--start` and `--end` in the new type's format. All-day end dates remain inclusive. No start/end is invented during conversion.
+- Switching between timed and all-day with `--all-day`/`--no-all-day` requires **both** `--start` and `--end` in the new type's format. All-day end dates remain inclusive.
 - Only an explicit `--repeat ''` removes recurrence. Empty or whitespace-only rule files are errors. Setting a rule requires a pattern object or file. Read [recurring-events.md](recurring-events.md) for occurrence/master scope and end-condition handling.
 - Supplying no update fields returns an error without PATCH.
 
@@ -104,21 +118,11 @@ python scripts/outlook_cal.py add "Trip" 2026-09-11 2026-09-13 --all-day --timez
 python scripts/outlook_cal.py update <ID> --no-all-day --start "2026-09-11 09:00" --end "2026-09-11 10:00" --timezone Asia/Shanghai --json
 ```
 
-For recurrence, a file avoids shell-specific escaping. Save a UTF-8 `weekly.json` containing only this pattern object:
-
-```json
-{"type":"weekly","interval":1,"daysOfWeek":["wednesday"],"firstDayOfWeek":"monday"}
-```
-
-Then, for an authorized series change with the requested end condition:
-
-```bash
-python scripts/outlook_cal.py update <masterID> --repeat-file weekly.json --repeat-times 8 --timezone Asia/Shanghai --json
-```
+For worked recurrence examples, see [recurring events](recurring-events.md).
 
 ## move and delete
 
-`move <ID> --to YYYY-MM-DD` or `move <ID> --days N` requires exactly one destination option. Signed `--days` shifts the scheduled date; `--to` chooses a specific scheduled date. Both preserve the time slot and duration, including all-day spans. Do not derive a move offset from the event's creation date.
+`move <ID> --to YYYY-MM-DD` or `move <ID> --days N` requires exactly one destination option. Signed `--days` shifts the scheduled date; `--to` chooses a specific scheduled date. Both preserve the time slot and duration, including all-day spans. The destination refers to when the event takes place.
 
 `delete <ID> [-y] [--series]` deletes the identified event. For an occurrence, `-y`/`--json` defaults to that occurrence only; `--series` deletes its whole series. Interactive mode can ask which scope to delete. Verify the requested target and scope from the conversation.
 
@@ -130,9 +134,21 @@ In `--json` operation mode stdout contains exactly one JSON value, with human di
 |---|---|
 | `context` | Clock/timezone object described above |
 | `date` | `{base, days, date}` |
+| `status` | Connection state, account, expiry, and current date |
+| `next` | One-element occurrence array, or `{"ended": true}` if none is found in the search window |
 | `list` | Event array, or daily counts with `--summary` |
 | `add`, `read`, `update`, `move` | Event object |
 | `delete` | Object with `deleted`, `subject`, `series` |
-| `free` | Per-day availability structure |
+| `free` | `{date: [[start, end], ...]}`; an empty array means no free time in that window |
 | Operation/argument error | `{"error": ..., "exit": 1}`, nonzero exit |
 | Disconnected `status` | Connection object with `connected: false` |
+
+JSON errors retain `error` and `exit`. Graph/network errors may also contain:
+
+| Field | Purpose |
+|---|---|
+| `code` | Language-independent category: `event_not_found`, `authentication_required`, `permission_denied`, `network_error`, `graph_error`, `occurrence_boundary`, or `invalid_response`. |
+| `http_status` | HTTP status when a response was received; network failures may have no response. |
+| `outcome_unknown` | When `true`, a write may have executed, such as after a timeout, server error, or unparseable success response. Its absence does not establish retry safety. |
+
+To verify event absence, use `read` with the correct account and ID and require `code: event_not_found` with `http_status: 404`. See [troubleshooting](troubleshooting.md#uncertain-writes) for recovery steps.

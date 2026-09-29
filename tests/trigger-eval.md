@@ -1,19 +1,12 @@
-# Trigger Evaluation Set
+# Trigger Evaluation
 
-Used to verify that SKILL.md's description triggers the skill correctly. Run through it once before and once after every description change, to guard against missed triggers and false triggers.
+Check whether the assistant loads this skill for Outlook calendar tasks. For example, “What's on tomorrow?” in a conversation that has selected Outlook should load it; “Write an email” should not.
 
-## How to use
+## Run the evaluation
 
-For each prompt, ask it verbatim in a **fresh session** and observe whether the agent loads this skill's instructions:
+Use a skill-capable assistant with the complete project installed. Enter each prompt verbatim in a fresh session and observe whether it loads [SKILL.md](../SKILL.md). Use mocked tools when evaluating activation alone to avoid calendar writes.
 
-- should-trigger all hit → no missed triggers
-- should-not-trigger all miss → no false triggers
-- On a missed trigger, check whether context and capability are described clearly
-- On a false trigger, check the product and task boundaries
-
-Target: should-trigger 12/12, should-not-trigger 6/6.
-
-For positive prompts that omit the product, first establish in the conversation that the user has selected Outlook calendar. Without a selected product or established context, do not bind generic scheduling requests to Outlook.
+For positive prompts that omit the product, first establish that the user has selected Outlook calendar. Record the expected and observed activation with session evidence. Run before and after description changes to compare routing behavior.
 
 ## should-trigger
 
@@ -43,6 +36,8 @@ For positive prompts that omit the product, first establish in the conversation 
 | 5 | What is Outlook? | Pure knowledge question, no calendar operations |
 | 6 | How many workdays are there in 2026? | Unrelated to calendar operations |
 
-## Assessing the description
+## Record results
 
-Judge whether the request is an Outlook calendar operation in its actual conversation context, not whether each example word appears in the description. Record observed loads and misses. Revise the capability or boundary only when a failure shows it is unclear; avoid growing keyword and exclusion lists for every example.
+The target is all 12 positive prompts loading the skill and all six negative prompts leaving it unloaded. A suggested manual report is `.local-calendar-test/trigger-results.md`, with date, assistant version, case number, observed activation, and failure evidence. Create the directory if needed; it is ignored by Git. This is a session-based evaluation with a manually written report.
+
+For misses or false positives, inspect the capability and scope description in the actual conversation context, then rerun affected cases.

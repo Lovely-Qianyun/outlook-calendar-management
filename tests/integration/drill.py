@@ -16,7 +16,10 @@ CLI = Path(__file__).resolve().parents[2] / "scripts" / "outlook_cal.py"
 
 
 class DrillError(RuntimeError):
-    pass
+    def __init__(self, message, *, code=None, http_status=None):
+        super().__init__(message)
+        self.code = code
+        self.http_status = http_status
 
 
 class CalendarClient:
@@ -38,7 +41,9 @@ class CalendarClient:
         except (ValueError, TypeError) as exc:
             raise DrillError(f"{args[0]} did not return valid JSON; outcome may be unknown") from exc
         if result.returncode:
-            raise DrillError(f"{args[0]} failed (exit {result.returncode}): {data}")
+            metadata = data if isinstance(data, dict) else {}
+            raise DrillError(f"{args[0]} failed (exit {result.returncode}): {data}",
+                             code=metadata.get("code"), http_status=metadata.get("http_status"))
         return data
 
 
@@ -54,6 +59,7 @@ class Drill:
         self.confirm = confirm
         self.prefix = f"ocal-smoke-{uuid4().hex}-"
         self.created = []
+        self.created_series = {}
         self.unknown_creates = []
         self.create_requests = {}
         self.delete_attempted = set()
@@ -84,6 +90,7 @@ class Drill:
         event_id = result.get("id") if isinstance(result, dict) else None
         require(isinstance(event_id, str) and bool(event_id), "Create response has no event ID")
         self.created.append(event_id)
+        self.created_series[event_id] = "--repeat" in extra or "--repeat-file" in extra
         self.unknown_creates.remove(subject)
         require(result.get("subject") == subject, "Created event subject differs")
         return event_id
@@ -191,6 +198,8 @@ class Drill:
                 self.delete_attempted.add(event_id)
                 result = self.client.call("delete", event_id, "--yes")
                 require(result.get("deleted") == event_id, "Delete response ID differs")
+                require(result.get("series") is self.created_series[event_id],
+                        "Delete response scope differs")
             except Exception as exc:
                 errors.append(f"Cleanup could not confirm deletion of {event_id}: {exc}")
         pending = [event_id for event_id in self.created if event_id in self.delete_attempted]
@@ -200,12 +209,28 @@ class Drill:
                 for event_id in pending:
                     matches = [e.get("id") for e in events
                                if e.get("id") == event_id or e.get("seriesMasterId") == event_id]
+                    target_status = "unverified"
+                    try:
+                        self.guard()
+                        target = self.client.call("read", event_id)
+                        require(isinstance(target, dict) and target.get("id") == event_id,
+                                "Cleanup read returned a different target")
+                        target_status = "present"
+                    except DrillError as exc:
+                        if exc.code == "event_not_found" and exc.http_status == 404:
+                            target_status = "absent"
+                        else:
+                            errors.append(f"Cleanup target read failed for {event_id}: {exc}")
+                    except Exception as exc:
+                        errors.append(f"Cleanup target read failed for {event_id}: {exc}")
+                    status = "present" if matches else target_status
                     self.deletion_checks.append({"id": event_id,
-                                                 "status": "present" if matches else "absent",
+                                                 "status": status,
+                                                 "target_status": target_status,
                                                  "matching_ids": matches})
-                    if matches:
-                        errors.append(f"Deleted event or its occurrences remain in test window: {event_id}")
-                    else:
+                    if status == "present":
+                        errors.append(f"Deleted target or its occurrences remain: {event_id}")
+                    elif status == "absent":
                         self.created.remove(event_id)
                 if not self.created:
                     self.checks.append("delete_verified")

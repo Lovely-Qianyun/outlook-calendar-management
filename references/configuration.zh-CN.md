@@ -1,50 +1,49 @@
-# 第一次连接日历
+# 连接 Outlook 日历
 
-本工具通过 Microsoft Graph API（微软官方接口）操作日历，首次使用前需完成登录授权（一次性操作，之后自动续期）。
-前置条件：Python 3.10+；依赖 requests/msal/tzdata 在首次运行时自动安装。
+连接个人 Outlook.com 或 Microsoft 365 账户后，即可查询和修改其默认日历。例如，登录后用 `status --json` 确认当前账户，再用 `list` 获取该账户的日程。
 
-## 连接步骤（约 2 分钟）
+## 登录并检查连接
 
-从项目根目录运行；缺失依赖会自动安装。
+需要 Python 3.10+ 和网络连接。在项目根目录运行：
 
 ```bash
-python scripts/outlook_setup.py   # 无参数时使用内置默认应用
+python -m pip install requests msal tzdata
+python scripts/outlook_setup.py
 ```
 
-1. 脚本打印一个**验证码**
-2. 浏览器打开 `https://www.microsoft.com/link`，输入验证码
-3. 使用 Outlook 账户（微软账户）登录并授权。授权范围共 3 个权限，各自用途如下：
+登录命令使用内置应用，终端会显示设备码操作说明。打开提示中的验证网址，输入验证码，使用要操作的账户登录。登录和日历命令也会自动安装缺失的依赖。
 
-| 权限 | 官方描述 | 在本工具中的用途 |
-|------|---------|-----------------|
-| `Calendars.ReadWrite` | Have full access to user calendars（日历完全访问） | 全部日程操作：查看、添加、修改、移动、删除（走 `/me/events`、`/me/calendar*` 接口） |
-| `MailboxSettings.Read` | Read user mailbox settings（读取邮箱设置） | 读取邮箱首选时区（`/me/mailboxSettings`），全天日程按它写入——机器时区与邮箱时区不同也不会跨天 |
-| `User.Read` | Sign in and read user profile（登录并读取用户资料） | 设备码登录的基础权限：返回登录用户身份（姓名、邮箱）；`status` 显示当前账户 |
+日历授权申请以下权限：
 
-> 三者互不替代：`User.Read` 读"用户是谁"（身份资料，登录必需）；`MailboxSettings.Read` 读"邮箱设置了什么"（时区、语言等偏好，本工具取时区靠它）；`Calendars.ReadWrite` 读写"日程内容"。
-4. 授权仍有效时自动续期；过期或被撤销后需要重新连接
+| 权限 | 用途 |
+|---|---|
+| `Calendars.ReadWrite` | 查询、创建、修改、移动和删除日程。 |
+| `MailboxSettings.Read` | 读取邮箱时区，用于处理全天日期。 |
 
-> 从旧版本升级时请重跑一次 `python scripts/outlook_setup.py` 补上 `MailboxSettings.Read` 权限（本次授权会出现新的权限确认项）。
+组织可能限制应用授权或设备码登录。遇到限制时，请联系管理员确认应用及所需权限；需要使用获准的自有应用时，参见 [Azure 应用配置](azure-app-setup.zh-CN.md)。
 
-**确认成功**：`python scripts/outlook_cal.py status` 显示"✅ 已连接到 Outlook 日历"。
+登录完成后运行：
 
-> 手机、电脑、网页上看到的是同一个日历——连接后所有操作实时同步。
+```bash
+python scripts/outlook_cal.py status --json
+python scripts/outlook_cal.py list --from 2026-09-28 --days 7 --timezone Asia/Shanghai --json
+```
 
-## 换账户 / 重新连接
+写入日历前核对 `connected: true` 和 `account`。查询日期及时区按实际需求替换。查询结果显示在终端，日历变更保存在已连接的 Outlook 账户中。
 
-重新运行 `python scripts/outlook_setup.py` 即可用另一个账户授权（会覆盖当前连接）。
-登录失效时（提示 invalid_grant / 401）同样如此。
+## 凭据与重新连接
 
-## 想用自己的 Azure 应用？
+凭据默认保存在 `~/.outlook_cal_token.json`，其中 `~` 代表当前用户的主目录。请妥善保管此文件，避免提交到版本库。已有授权仍有效时，工具会自动续期。
 
-默认开箱即用，通常无需操作。如需注册自己的应用（如出于安全隔离目的），见 `azure-app-setup.zh-CN.md`。
-注册后仅需复制 **Client ID** 一个参数：`python scripts/outlook_setup.py <你的Client ID>`。
+切换账户，或授权过期、被撤销时，重新运行 `python scripts/outlook_setup.py`，再通过 `status --json` 核对。成功登录会替换当前凭据路径中保存的连接。
 
-## 单独保存测试登录
+使用自有 Azure 应用时，按 [Azure 应用配置](azure-app-setup.zh-CN.md)传入其客户端 ID。
 
-在运行登录、日历命令之前，将 `OCAL_TOKEN_PATH` 设为单独的凭据文件，父目录需已存在。运行集成脚本时也保留此设置，其子进程会继承。未设置时仍使用 `~/.outlook_cal_token.json`。
+## 单独保存测试凭据
 
-从项目根目录运行的 PowerShell 示例：
+例如，可以保留常用账户的登录，把测试账户凭据放到 `.local-calendar-test/outlook-token.json`。在**登录和运行日历命令之前**设置 `OCAL_TOKEN_PATH`，并在测试所用终端中持续保留该设置。父目录需要存在。
+
+在项目根目录使用 PowerShell：
 
 ```powershell
 New-Item -ItemType Directory -Force .local-calendar-test | Out-Null
@@ -53,4 +52,21 @@ python scripts/outlook_setup.py
 python scripts/outlook_cal.py status --json
 ```
 
-该目录已被 Git 忽略。单独的凭据文件保留原有登录，但不会创建独立日历：请登录准备使用的测试账户，写入前核对邮箱。
+Bash 对应写法：
+
+```bash
+mkdir -p .local-calendar-test
+export OCAL_TOKEN_PATH="$PWD/.local-calendar-test/outlook-token.json"
+python scripts/outlook_setup.py
+python scripts/outlook_cal.py status --json
+```
+
+该目录已被 Git 忽略。路径决定凭据保存位置，登录时选择的账户决定实际访问哪个日历。运行[实机集成测试](../tests/integration/README.zh-CN.md)前，请核对账户邮箱。
+
+恢复默认凭据路径时，可打开未设置该变量的终端，或在 PowerShell 中运行 `Remove-Item Env:OCAL_TOKEN_PATH`，在 Bash 中运行 `unset OCAL_TOKEN_PATH`。
+
+## 时区与语言
+
+用 `--timezone Asia/Shanghai` 或其他 IANA/Windows 时区名称，指定时段日程和查询窗口的时区。全天写入优先使用邮箱时区，不可用时回退到选定时区。若邮箱时区读取失败，且邮箱与本机时区不同，请先重新授权相应权限，再进行依赖全天日期的操作。
+
+终端文案用 `--lang zh` 或 `--lang en` 选择，也可以在当前会话设置 `OCAL_LANG`。JSON 字段名保持一致。完整格式见[命令参考](commands.zh-CN.md)，连接问题见[故障排查](troubleshooting.zh-CN.md)。

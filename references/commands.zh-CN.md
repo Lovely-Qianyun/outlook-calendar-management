@@ -1,6 +1,22 @@
 # 命令参考
 
-调用方式为 `python "<skill目录>/scripts/outlook_cal.py" <命令> [参数]`。下文使用项目根目录下的简写 `python scripts/outlook_cal.py`。只有日历命令要求登录，参见 [configuration.zh-CN.md](configuration.zh-CN.md)。
+用命令行查询和修改已连接账户的默认 Outlook 日历。本页按任务列出命令、参数和返回结果；安装与登录见[快速开始](../README.zh-CN.md#快速开始)。
+
+## 示例：查找一个下午的空闲时间
+
+在项目根目录运行，日期和时区替换为实际需求：
+
+```bash
+python scripts/outlook_cal.py free 2026-09-30 --from 14:00 --to 17:00 --timezone Asia/Shanghai --json
+```
+
+若只有 15:00–15:30 被占用，输出为：
+
+```json
+{"2026-09-30": [["14:00", "15:00"], ["15:30", "17:00"]]}
+```
+
+结果显示在终端；命令末尾加 `> free.json` 可保存到当前目录，已有同名文件会被覆盖。日历写入保存在 Outlook 中。以下命令均从项目根目录运行；其他目录使用脚本的完整路径。尖括号中的值（如 `<ID>`）需要替换为实际值。
 
 ## 共用参数与格式
 
@@ -52,8 +68,6 @@ python scripts/outlook_cal.py list --from 2026-09-07 --days 7 --search "会议" 
 python scripts/outlook_cal.py list --created-after 2026-09-08 --created-before 2026-09-09 --timezone Asia/Shanghai --json
 ```
 
-已移除 `today`、`tomorrow`、`week` 命令及 `--past`。先确定实际日期范围，再调用 `list --from`。
-
 ### read 与 next
 
 `read <ID>` 返回完整详情，包括创建时间、组织者、提醒、重复规则和适用时的系列主 ID。`next <ID>` 查找未来 365 天内定期日程的下次出现；系列已结束和非定期日程有各自的结果。
@@ -76,14 +90,14 @@ python scripts/outlook_cal.py free 2026-09-11 --from 14:00 --to 17:00 --timezone
 |---|---|
 | `-l` / `--location`、`-b` / `--body` | 地点、备注 |
 | `--category "工作,重要"` | 逗号分隔的类别 |
-| `--remind N` | 时段日程提前 N 分钟，全天日程提前 N 天 |
+| `--remind N` | 非负数；时段日程提前 N 分钟，全天日程提前 N 天，全天上限 1826 天 |
 | `--repeat-file <路径>` 或 `--repeat '<JSON>'` | 经校验的 Graph recurrence pattern，二选一 |
 | `--repeat-until YYYY-MM-DD` 或 `--repeat-times N` | 结束条件，二选一，需同时给出规则 |
 | `--importance low\|normal\|high`、`--private` | 重要性、隐私 |
 | `--busy free\|tentative\|busy\|oof\|workingElsewhere` | 空闲/忙碌状态 |
 | `--force` | 跳过冲突检查 |
 
-重叠会警告，不阻断创建。非法、不存在或因夏令时而有歧义的墙钟时间会被拒绝。遇到重复的本地时刻，先确定实际时刻，再使用明确的 UTC 起止值及 `--timezone UTC`。不会根据省略的时长猜测结束时间。
+重叠会警告，不阻断创建。非法、不存在或因夏令时而有歧义的墙钟时间会被拒绝。遇到重复的本地时刻，先确定实际时刻，再使用明确的 UTC 起止值及 `--timezone UTC`。
 
 ```bash
 python scripts/outlook_cal.py add "计划讨论" "2026-09-11 15:00" "2026-09-11 15:30" --remind 10 --timezone Asia/Shanghai --json
@@ -96,7 +110,7 @@ python scripts/outlook_cal.py add "旅行" 2026-09-11 2026-09-13 --all-day --tim
 
 - 空字符串可清空标题、地点、备注、类别，`--no-remind` 关闭提醒。
 - 日程类型不变时，可只修改开始或结束，最终时间范围仍须有效。
-- 使用 `--all-day`/`--no-all-day` 在全天与时段之间转换时，必须明确给出新类型格式的 **`--start` 和 `--end`**。全天结束日期仍包含当天；类型转换不猜测开始或结束。
+- 使用 `--all-day`/`--no-all-day` 在全天与时段之间转换时，必须明确给出新类型格式的 **`--start` 和 `--end`**。全天结束日期仍包含当天。
 - 只有显式 `--repeat ''` 才移除重复规则；空规则文件或只有空白的文件会报错。设置规则传 pattern 对象或文件。单次/系列范围及结束条件见 [recurring-events.zh-CN.md](recurring-events.zh-CN.md)。
 - 没有修改字段时返回错误，不发送 PATCH。
 
@@ -104,21 +118,11 @@ python scripts/outlook_cal.py add "旅行" 2026-09-11 2026-09-13 --all-day --tim
 python scripts/outlook_cal.py update <ID> --no-all-day --start "2026-09-11 09:00" --end "2026-09-11 10:00" --timezone Asia/Shanghai --json
 ```
 
-重复规则使用文件可避开不同 shell 的引号转义。保存 UTF-8 文件 `weekly.json`，内容只有以下 pattern 对象：
-
-```json
-{"type":"weekly","interval":1,"daysOfWeek":["wednesday"],"firstDayOfWeek":"monday"}
-```
-
-然后在已授权范围内，按用户要求的结束条件执行系列修改：
-
-```bash
-python scripts/outlook_cal.py update <主ID> --repeat-file weekly.json --repeat-times 8 --timezone Asia/Shanghai --json
-```
+定期规则的创建与修改示例见[定期日程](recurring-events.zh-CN.md)。
 
 ## move 与 delete
 
-`move <ID> --to YYYY-MM-DD` 或 `move <ID> --days N` 必须二选一。有符号的 `--days` 平移发生日期，`--to` 指定实际目的日期。两者保留原时段与时长，包括全天跨度。不能根据创建日期推断移动天数。
+`move <ID> --to YYYY-MM-DD` 或 `move <ID> --days N` 必须二选一。有符号的 `--days` 平移发生日期，`--to` 指定实际目的日期。两者保留原时段与时长，包括全天跨度。目的日期指日程实际发生的日期。
 
 `delete <ID> [-y] [--series]` 删除目标日程。目标为单次出现时，`-y`/`--json` 默认只删除该次，`--series` 删除整个系列；交互模式可选择删除范围。从对话确认实际目标与范围。
 
@@ -130,9 +134,21 @@ python scripts/outlook_cal.py update <主ID> --repeat-file weekly.json --repeat-
 |---|---|
 | `context` | 上述时钟/时区对象 |
 | `date` | `{base, days, date}` |
+| `status` | 连接状态、账户、有效期和当前日期 |
+| `next` | 包含下次出现的一项数组；查询窗口内未找到时为 `{"ended": true}` |
 | `list` | 日程数组，`--summary` 时为每日数量 |
 | `add`、`read`、`update`、`move` | 日程对象 |
 | `delete` | 包含 `deleted`、`subject`、`series` 的对象 |
-| `free` | 按天组织的空闲结构 |
+| `free` | `{日期: [[开始, 结束], ...]}`；空数组表示窗口内没有空闲 |
 | 操作/参数错误 | `{"error": ..., "exit": 1}`，非零退出 |
 | 未连接的 `status` | 含 `connected: false` 的连接状态对象 |
+
+JSON 错误保留 `error` 和 `exit`，Graph/网络错误还可包含以下字段：
+
+| 字段 | 用途 |
+|---|---|
+| `code` | 与语言无关的分类：`event_not_found`、`authentication_required`、`permission_denied`、`network_error`、`graph_error`、`occurrence_boundary` 或 `invalid_response`。 |
+| `http_status` | 已取得的 HTTP 状态码；网络故障可能没有响应。 |
+| `outcome_unknown` | 为 `true` 时表示写入可能已执行，例如超时、服务端错误或成功响应无法解析。缺少该字段不构成安全重试的依据。 |
+
+核实日程不存在时，使用 `read` 返回的 `code: event_not_found` 和 `http_status: 404`，并核对账户与 ID。恢复步骤见[故障排查](troubleshooting.zh-CN.md#写入结果不明时)。

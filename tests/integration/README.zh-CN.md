@@ -1,35 +1,50 @@
-# 可选的真实日历冒烟测试
+# 真实日历集成测试
 
-`drill.py` 通过日历 CLI 调用 Microsoft Graph。它创建两个带唯一主题的测试日程（其中一个是重复两次的系列），读取和修改它们，最后只删除本次创建成功返回的 ID。脚本不会清空账号，也不会删除搜索结果中的其他日程。建议使用专用测试账号。
+验证 CLI 能否通过 Microsoft Graph 完成一次创建、读取、修改、移动和清理流程。例如，运行脚本会创建一个普通日程和一个重复两次的系列，检查修改结果，再删除本次创建时返回的 ID，最终输出 JSON 报告。
 
-日常运行 `python -m pytest tests/` 全部是离线测试，也包含该脚本的模拟客户端测试。不要把真实冒烟测试放进日常自动验证流程。
+## 准备并运行
 
-## 显式运行
+需要 Python 3.10+、网络连接和可写入的 Outlook 测试账户。**本流程会改动真实日历**，建议使用专用测试账户；日常开发的离线验证见[开发者指南](../../DEVELOPMENT.zh-CN.md)。
 
-先连接准备使用的测试账号。如需保留已有连接，请在同一终端中先将 `OCAL_TOKEN_PATH` 设为独立的令牌文件路径，再登录并测试；详见[配置说明](../../references/configuration.zh-CN.md)。测试脚本的子进程会继承该设置。
+在项目根目录使用 PowerShell，单独保存测试凭据：
 
-```text
+```powershell
+python -m pip install requests msal tzdata
+New-Item -ItemType Directory -Force .local-calendar-test | Out-Null
+$env:OCAL_TOKEN_PATH = Join-Path (Get-Location) '.local-calendar-test/outlook-token.json'
 python scripts/outlook_setup.py
-python tests/integration/drill.py --account test@example.com --confirm
-python tests/integration/drill.py --account test@example.com --confirm --lang zh
+python scripts/outlook_cal.py status --json
 ```
 
-将 `test@example.com` 替换为当前连接的日历账号。写入必须同时提供 `--account` 和 `--confirm`。脚本在每次写入和每次清理删除前，通过 `status --json` 核对实际账号；账号不匹配就停止该操作。`--lang` 决定底层 CLI 的输出语言，最终报告始终使用相同的 JSON 字段。
+登录时选择测试账户。确认 `status` 返回的邮箱后，将下方 `test@example.com` 替换为该邮箱并运行一次：
 
-所有命令都以 Python 子进程参数列表运行，Windows 不需要 Bash。日期使用明确值，定时日程同时提供起止时间，重复规则使用 JSON，时区统一为 UTC。测试日期从当前 UTC 日期之后 30 天开始。固定的三天查询窗口覆盖预期的两个重复日期及额外一天，用于发现多余实例。测试日程标为空闲，主题带唯一的 `ocal-smoke-...-` 前缀。
+```powershell
+python tests/integration/drill.py --account test@example.com --confirm --lang zh > .local-calendar-test/report.json
+```
 
-## 覆盖内容和结果
+`--account` 指定预期账户，`--confirm` 允许测试写入及清理；脚本在写入、删除和诊断查询前核对账户，发现不匹配时停止相应操作。测试子进程继承 `OCAL_TOKEN_PATH`。Bash 的凭据设置见[连接配置](../../references/configuration.zh-CN.md)，测试命令相同。
 
-脚本检查 `context`、确定性的 `date` 日期加减、定时日程 `add` 和 `read`、主题 `update`、按明确日期 `move`、明确时间窗口的 `list`、`free` 返回结构，以及每日重复规则创建。它核对日程读取结果、系列规则，以及恰好两个展开实例的起止时间。清理后查询固定测试窗口，确认已知日程 ID 及以其为 `seriesMasterId` 的实例均已消失。详细参数校验、夏令时边界、其他重复模式、空闲时段计算正确性和错误情况由离线测试覆盖。
+## 结果在哪里
 
-退出码为 0 且报告 `"ok": true` 表示检查和清理均成功。失败报告包括：
+上述命令将 JSON 报告保存到项目根目录下的 `.local-calendar-test/report.json`，再次运行会覆盖同名报告；省略重定向则显示在终端。退出码为 0 且 `ok` 为 `true`，表示检查和清理均成功。
 
-- `errors`：失败的检查或清理操作。
-- `remaining_ids`：本次创建后，尚未确认删除成功的 ID。
-- `deletion_checks`：删除后的回查状态：`absent`（窗口内已消失）、`present`（仍存在）或 `unverified`（未能核实）。
-- `unknown_create_subjects`：创建请求未返回可用 ID 的唯一主题；这些请求的结果可能未知。
-- `unknown_create_checks`：在固定窗口内按完整主题只读回查的结果：`observed`（查到匹配）、`not_found`（未查到）或 `unverified`（未能核实），并附匹配 ID 和时间。查得的 ID 不会加入自动清理。
-- `test_window`：上述检查使用的固定日期范围和时区。
-- `subject_prefix`：供人工检查的本次运行标识。
+| 报告字段 | 含义 |
+|---|---|
+| `ok`、`checks`、`errors` | 总体结果、已通过检查及失败信息。 |
+| `account`、`subject_prefix`、`test_window` | 目标账户、本次唯一主题前缀、固定查询日期和 UTC 时区。 |
+| `remaining_ids` | 本次创建后，尚未确认删除成功的 ID。 |
+| `deletion_checks` | 删除回查结果：`absent`、`present` 或 `unverified`；`target_status` 记录原目标 ID 的回读状态，`matching_ids` 记录窗口内仍存在的关联项。 |
+| `unknown_create_subjects` | 创建请求未返回可用 ID 的主题，写入结果待核实。 |
+| `unknown_create_checks` | 按上述完整主题只读回查的结果：`observed`、`not_found` 或 `unverified`，附匹配 ID 和时间。 |
 
-检查失败后仍会执行清理。清理只处理本次创建返回的 ID，并在每次删除和诊断查询前重新核对账号。脚本不会自动重试超时、响应格式错误等结果不明的写入；删除后回查失败也不会再次发起删除。创建未返回 ID 时，会按完整主题只读查询并报告观察结果，不重发创建，也不删除查得的 ID。`not_found` 只表示固定窗口内未查到，不能证明写入从未发生。再次运行前，请在预期账号中检查报告中的未解决项目。强制终止进程可能导致清理无法执行，可以用唯一主题前缀查找遗留的测试数据。
+测试日程在 Outlook 中暂时可见，主题前缀为 `ocal-smoke-...-`，忙碌状态为“空闲”。测试日期从当前 UTC 日期后 30 天开始，固定三天窗口覆盖两个预期出现日期及额外一天。
+
+## 失败后的检查
+
+检查失败后仍会尝试清理，自动删除范围限于本次创建返回的 ID。结果不明的写入会保留在报告中供核实；按主题查到的其他 ID 仅用于诊断。`not_found` 表示固定窗口内未查到。
+
+再次运行前，在报告指定账户与日期窗口中检查 `remaining_ids` 和 `unknown_create_checks`。强制终止进程可能中断清理，可用 `subject_prefix` 定位遗留测试日程。确认遗留项的来源和状态后再处理。
+
+## 覆盖范围
+
+脚本检查本地 `context`、`date` 运算，时段日程的增查改移，`list` 查询，`free` 返回结构，以及每日重复系列的规则和恰好两次出现。清理时核对删除响应的 ID 和系列标记；清理后同时验证固定窗口中没有关联项、原目标 ID（系列使用主事件 ID）返回明确的 `event_not_found` / 404。其他读取错误记为尚未核实。完整参数校验、夏令时、其他重复模式、空闲计算和错误处理由离线测试覆盖。

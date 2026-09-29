@@ -54,16 +54,23 @@ def _call(method, endpoint, token, data=None, prefer_immutable=False):
         headers["Content-Type"] = "application/json"
     url = endpoint if endpoint.startswith("http") else f"{GRAPH_BASE}{endpoint}"
     tz_stripped = False  # 时区头只允许剥一次，防止循环
+    is_write = method in ("POST", "PATCH", "DELETE")
+    uncertain_write = False
     for attempt in range(4):  # 1 次初始 + 最多 3 次重试
         try:
             resp = requests.request(method, url, headers=headers, json=data, timeout=(10, 30))
         except requests.exceptions.RequestException as e:
+            uncertain_write = uncertain_write or is_write
             if method in ("GET", "DELETE") and attempt < 2:
                 time.sleep((1, 3)[attempt])
                 continue
             if method in ("POST", "PATCH"):
-                raise CalError(t("err_network_maybe", e=e))
-            raise CalError(t("err_network", e=e))
+                raise CalError(t("err_network_maybe", e=e), code="network_error",
+                               outcome_unknown=True) from e
+            raise CalError(t("err_network", e=e), code="network_error",
+                           outcome_unknown=True if uncertain_write else None) from e
+        if is_write and resp.status_code >= 500:
+            uncertain_write = True
         if resp.status_code == 429:
             # 限流：Retry-After 头优先；没有就 1/2/4s 退避；所有方法都安全重试
             wait = _retry_after_seconds(resp)
@@ -78,7 +85,9 @@ def _call(method, endpoint, token, data=None, prefer_immutable=False):
                 time.sleep((1, 2, 4)[min(attempt, 2)])
                 continue
         if resp.status_code == 401:
-            raise CalError(t("err_login_expired", hint=setup_hint()))
+            raise CalError(t("err_login_expired", hint=setup_hint()),
+                           code="authentication_required", http_status=401,
+                           outcome_unknown=True if uncertain_write else None)
         if resp.status_code >= 400:
             try:
                 err = resp.json().get('error', {})
@@ -100,13 +109,24 @@ def _call(method, endpoint, token, data=None, prefer_immutable=False):
                     headers.pop("Prefer", None)
                 continue
             if code == 'ErrorOccurrenceCrossingBoundary':
-                raise CalError(t("err_crossing"))
-            if code == 'ErrorItemNotFound':
-                raise CalError(t("err_not_found"))
-            raise CalError(t("err_api", code=resp.status_code, msg=msg))
+                raise CalError(t("err_crossing"), code="occurrence_boundary",
+                               http_status=resp.status_code,
+                               outcome_unknown=True if uncertain_write else None)
+            if resp.status_code == 404 and code == 'ErrorItemNotFound':
+                raise CalError(t("err_not_found"), code="event_not_found", http_status=404,
+                               outcome_unknown=True if uncertain_write else None)
+            raise CalError(t("err_api", code=resp.status_code, msg=msg),
+                           code="permission_denied" if resp.status_code == 403 else "graph_error",
+                           http_status=resp.status_code,
+                           outcome_unknown=True if uncertain_write else None)
         if resp.status_code == 204:
             return None
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise CalError(t("err_invalid_response"), code="invalid_response",
+                           http_status=resp.status_code,
+                           outcome_unknown=True if is_write else None) from exc
 
 
 def _get_all(url, token, prefer_immutable=False):

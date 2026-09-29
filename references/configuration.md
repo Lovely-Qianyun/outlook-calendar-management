@@ -1,50 +1,49 @@
-# Connecting to Your Calendar for the First Time
+# Connect an Outlook Calendar
 
-This toolkit operates your calendar through the Microsoft Graph API (Microsoft's official interface). You need to sign in and authorize once before first use (a one-time step; the login renews automatically afterwards).
-Prerequisites: Python 3.10+; the dependencies requests/msal/tzdata are installed automatically on first run.
+Connect a personal Outlook.com or Microsoft 365 account so the tool can query and change its default calendar. For example, after sign-in, `status --json` identifies the connected account and `list` returns its events.
 
-## Connection steps (about 2 minutes)
+## Sign in and check the connection
 
-Run from the project root; missing dependencies are installed automatically.
+Use Python 3.10+ with network access. Run from the project root:
 
 ```bash
-python scripts/outlook_setup.py   # no arguments = built-in default app
+python -m pip install requests msal tzdata
+python scripts/outlook_setup.py
 ```
 
-1. The script prints a **verification code**
-2. Open `https://www.microsoft.com/link` in a browser and enter the code
-3. Sign in with your Outlook account (Microsoft account) and authorize. Three permissions are requested, each with its own purpose:
+The setup command uses the built-in application and prints device-code instructions. Open the displayed verification URL, enter the code, and sign in with the intended account. Login and calendar commands also install missing dependencies automatically.
 
-| Permission | Official description | Use in this toolkit |
-|------------|----------------------|---------------------|
-| `Calendars.ReadWrite` | Have full access to user calendars | All event operations: view, add, modify, move, delete (via `/me/events`, `/me/calendar*`) |
-| `MailboxSettings.Read` | Read user mailbox settings | Reads the mailbox's preferred timezone (`/me/mailboxSettings`); all-day events are written in it, so they never span two days even when the machine timezone differs |
-| `User.Read` | Sign in and read user profile | Base permission of the device-code sign-in: returns the signed-in user's identity (name, email); `status` shows the current account |
+The calendar authorization requests are:
 
-> The three are independent and non-interchangeable: `User.Read` reads "who the user is" (identity profile, required for sign-in); `MailboxSettings.Read` reads "what the mailbox is configured with" (timezone, language preferences - this is what the toolkit uses for the timezone); `Calendars.ReadWrite` reads/writes "the event content".
-4. Done - the login renews automatically while the stored authorization remains valid; reconnect if it expires or is revoked
+| Permission | Purpose |
+|---|---|
+| `Calendars.ReadWrite` | Query, create, edit, move, and delete calendar events. |
+| `MailboxSettings.Read` | Read the mailbox timezone used for all-day dates. |
 
-> When upgrading from an older version, re-run `python scripts/outlook_setup.py` once to add the `MailboxSettings.Read` permission (a new consent item will appear).
+An organization may restrict application consent or device-code sign-in. If access is blocked, ask its administrator about the application and requested permissions, or follow the [custom app guide](azure-app-setup.md) for an approved registration.
 
-**To confirm success**: `python scripts/outlook_cal.py status` shows "✅ Connected to Outlook calendar".
+After sign-in:
 
-> Your phone, computer, and web show the same calendar - all operations sync in real time after connecting.
+```bash
+python scripts/outlook_cal.py status --json
+python scripts/outlook_cal.py list --from 2026-09-28 --days 7 --timezone Asia/Shanghai --json
+```
 
-## Switching accounts / reconnecting
+Check `connected: true` and `account` before calendar writes. Replace the query date and timezone with your intended values. Results appear in the terminal; calendar changes appear in the connected Outlook account.
 
-Re-run `python scripts/outlook_setup.py` to authorize with another account (overwrites the current connection).
-Do the same when the login expires (reports invalid_grant / 401).
+## Credentials and reconnection
 
-## Want to use your own Azure app?
+Credentials are saved in `~/.outlook_cal_token.json` by default, where `~` is your user home directory. Keep this file private and out of version control. The tool refreshes the login while the stored authorization remains valid.
 
-The built-in default app works out of the box; usually nothing to do. If you want to register your own app (e.g. for security isolation), see `azure-app-setup.md`.
-After registration you only need to copy one parameter - the **Client ID**: `python scripts/outlook_setup.py <your Client ID>`.
+To switch accounts or recover from expired/revoked authorization, rerun `python scripts/outlook_setup.py` and check `status --json`. Successful setup replaces the connection saved at the current token path.
 
-## Separate test login
+For a custom Azure application, pass its client ID as described in [Azure app setup](azure-app-setup.md).
 
-Set `OCAL_TOKEN_PATH` to a separate credential file before running both setup and calendar commands. The parent directory must exist. The same setting must remain present for the integration runner, whose subprocesses inherit it. Without this setting the tool uses `~/.outlook_cal_token.json`.
+## Separate test credentials
 
-PowerShell example from the project root:
+For example, you can keep your usual login and save a test account's credentials in `.local-calendar-test/outlook-token.json`. Set `OCAL_TOKEN_PATH` **before both setup and calendar commands**, and keep it set in the terminal used for testing. The parent directory must exist.
+
+PowerShell, from the project root:
 
 ```powershell
 New-Item -ItemType Directory -Force .local-calendar-test | Out-Null
@@ -53,4 +52,21 @@ python scripts/outlook_setup.py
 python scripts/outlook_cal.py status --json
 ```
 
-This directory is ignored by Git. A separate credential file preserves the usual login, but it does not create a separate calendar: sign in with the intended test account and verify its email before test writes.
+Bash equivalent:
+
+```bash
+mkdir -p .local-calendar-test
+export OCAL_TOKEN_PATH="$PWD/.local-calendar-test/outlook-token.json"
+python scripts/outlook_setup.py
+python scripts/outlook_cal.py status --json
+```
+
+The directory is ignored by Git. The path selects a credential file; the account chosen during sign-in determines which calendar is accessed. Verify its email before running the [live integration test](../tests/integration/README.md).
+
+To return to the default credential file, start a terminal without this setting, or clear it with `Remove-Item Env:OCAL_TOKEN_PATH` in PowerShell / `unset OCAL_TOKEN_PATH` in Bash.
+
+## Timezone and language
+
+Use `--timezone Asia/Shanghai` (or another IANA/Windows timezone name) to select the timezone for timed events and query windows. All-day writes use the mailbox timezone when available, falling back to the selected timezone. If mailbox-timezone access fails, reconnect with the required permission before relying on all-day dates across different timezones.
+
+Use `--lang zh` or `--lang en` for terminal messages, or set `OCAL_LANG` for the session. JSON keys stay the same. Full formats are in the [command reference](commands.md); connection errors are covered in [troubleshooting](troubleshooting.md).

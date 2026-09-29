@@ -1,38 +1,34 @@
-# Bring-Your-Own Azure App Registration Guide
+# Use Your Own Azure Application
 
-> Read this only if you do NOT use the **built-in default app** and want to register your own Azure app; otherwise skip it.
->
-> Background: this toolkit signs in via the "device-code flow" - the terminal shows a verification code, and you open microsoft.com/link in a browser and enter it to authorize. The default app already contains all configuration for this flow; a bring-your-own app only needs to be registered and provide one Client ID.
+Supply your own application client ID when you need to manage the registration and consent. For example, register a public client for a personal Outlook account, sign in, and use the same calendar commands. For a standard connection, use the [built-in application](configuration.md).
 
-## Why you need a Client ID
+## Register and configure
 
-- **Client ID (application ID)**: the unique identifier of your app in Microsoft's identity system. Device-code sign-in only needs this.
-- **No Tenant ID / Client Secret needed**: those two are for "server-side, no-human-interaction" scenarios (confidential clients). This toolkit is a public client using the device-code flow - any screen asking for them can be ignored.
+You need an account allowed to register applications in a Microsoft Entra tenant, or an administrator's help. Open **App registrations** in the [Microsoft Entra admin center](https://entra.microsoft.com/), create an application, and record its **Application (client) ID**. Choose account types for the intended users; see Microsoft's [registration guide](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app).
 
-## Registration steps
+1. Name the application. Choose personal Microsoft accounts for personal Outlook.com use; organizational users need compatible account support and administrator permission. The current setup script uses the `consumers` / `common` authorities and exposes no tenant-ID argument, so organizational registrations must accommodate those endpoints.
+2. Enable **Allow public client flows** in authentication settings and save. This tool uses device-code authentication for public clients; see Microsoft's [public-client guidance](https://learn.microsoft.com/en-us/entra/identity-platform/msal-client-applications).
+3. Add Microsoft Graph **delegated permissions** `Calendars.ReadWrite` and `MailboxSettings.Read`. Their purposes are in [connection setup](configuration.md). Complete administrator consent where organization policy requires it.
 
-1. Open https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade
-2. Sign in with your Outlook account
-3. **New registration** → enter an app name → account type: **"Personal Microsoft accounts only"**
-4. **Authentication** → Add a platform → **"Mobile and desktop applications"** → check `https://login.microsoftonline.com/common/oauth2/nativeclient`
-5. Bottom of the Authentication page → **"Allow public client flows"** → set to **"Yes"** → Save
-6. **API permissions** → Add a permission → Microsoft Graph → Delegated permissions → add all three in turn: `User.Read`, `Calendars.ReadWrite`, `MailboxSettings.Read` (their purposes are listed in the connection-steps table of `configuration.md`)
-7. Back on the **Overview** page, copy the **"Application (client) ID"** at the top
+This sign-in flow uses a client ID and interactive user authorization; it requires no client secret.
 
-## Authentication
+## Sign in and check the result
 
-Run from the project root.
+After installing dependencies from the [quick start](../README.md#quick-start), run from the project root, replacing the placeholder with your application's client ID:
 
 ```bash
-python scripts/outlook_setup.py <your Client ID>
+python scripts/outlook_setup.py YOUR_CLIENT_ID
+python scripts/outlook_cal.py status --json
 ```
 
-The rest of the flow is identical to the default app: the script prints a code → open `https://www.microsoft.com/link` in a browser and enter it → authorize with your Outlook account. The token renews automatically.
+Follow the terminal's device-code instructions. `status` should report `connected: true` and the expected account. Credentials are saved at `OCAL_TOKEN_PATH`, defaulting to `~/.outlook_cal_token.json`; successful setup replaces any connection stored at that path.
 
-## Common failures
+## Connection failures
 
-| Symptom | Cause & fix |
-|---------|-------------|
-| Device code reports "app not found" | Account type isn't "Personal Microsoft accounts", or "Allow public client flows" isn't enabled |
-| 403 Forbidden | The `Calendars.ReadWrite` delegated permission wasn't added |
-| Verification code expired | Re-run `python scripts/outlook_setup.py` and try again |
+| Symptom | Check |
+|---|---|
+| Application not found or account type mismatch | Client ID, supported account types, public-client settings, and organization restrictions. |
+| 403 permission error | Delegated permissions and consent; calendar operations need `Calendars.ReadWrite`, mailbox timezone reads need `MailboxSettings.Read`. |
+| Expired device code | Run the same setup command again and use the new code. |
+
+For other problems, see [troubleshooting](troubleshooting.md).

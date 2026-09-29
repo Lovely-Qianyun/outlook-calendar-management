@@ -52,6 +52,8 @@ class FakeClient:
             self.events[event_id] = event
             return copy.deepcopy(event)
         if command == "read":
+            if args[1] not in self.events:
+                raise drill.DrillError("Event not found", code="event_not_found", http_status=404)
             return copy.deepcopy(self.events[args[1]])
         if command == "update":
             self.events[args[1]]["subject"] = args[args.index("--subject") + 1]
@@ -85,8 +87,8 @@ class FakeClient:
         if command == "free":
             return {args[1]: [["14:00", "17:00"]]}
         if command == "delete":
-            del self.events[args[1]]
-            return {"deleted": args[1]}
+            event = self.events.pop(args[1])
+            return {"deleted": args[1], "series": bool(event.get("recurrence"))}
         raise AssertionError(f"Unexpected command: {args}")
 
 
@@ -114,8 +116,8 @@ def test_success_cleans_only_returned_create_ids():
                                  "list", "free", "recurrence", "recurrence_expansion", "delete_verified"]
     assert result["test_window"] == {"from": "2026-10-08", "days": 3, "timezone": "UTC"}
     assert result["deletion_checks"] == [
-        {"id": "created-1", "status": "absent", "matching_ids": []},
-        {"id": "created-2", "status": "absent", "matching_ids": []},
+        {"id": "created-1", "status": "absent", "target_status": "absent", "matching_ids": []},
+        {"id": "created-2", "status": "absent", "target_status": "absent", "matching_ids": []},
     ]
     assert list(client.events) == ["existing-personal-event"]
     assert [a[1] for a in client.calls if a[0] == "delete"] == ["created-2", "created-1"]
@@ -257,7 +259,7 @@ def test_delete_acknowledgement_does_not_replace_absence_check():
                 self.calls.append(args)
                 # Different subjects must not hide surviving IDs or occurrences.
                 self.events[args[1]]["subject"] = "unexpectedly renamed"
-                return {"deleted": args[1]}
+                return {"deleted": args[1], "series": bool(self.events[args[1]].get("recurrence"))}
             return super().call(*args)
 
     client = FalseDeleteClient()
@@ -328,3 +330,65 @@ def test_recurring_expansion_validates_count_and_times(issue):
     assert "recurrence_expansion" not in result["checks"]
     assert result["remaining_ids"] == []
     assert list(client.events) == ["existing-personal-event"]
+
+
+
+def test_cleanup_checks_master_even_when_occurrences_are_outside_window():
+    class SurvivingMasterClient(FakeClient):
+        def call(self, *args):
+            if args[0] == "delete" and self.events[args[1]].get("recurrence"):
+                self.calls.append(args)
+                for bound in ("start", "end"):
+                    raw = self.events[args[1]][bound]["dateTime"]
+                    self.events[args[1]][bound]["dateTime"] = "2027-10-08" + raw[10:]
+                return {"deleted": args[1], "series": True}
+            return super().call(*args)
+    client = SurvivingMasterClient()
+    result = drill.Drill(client, "test@example.com", True).run()
+    assert not result["ok"]
+    assert result["remaining_ids"] == ["created-2"]
+    check = next(c for c in result["deletion_checks"] if c["id"] == "created-2")
+    assert check["matching_ids"] == []
+    assert check["target_status"] == check["status"] == "present"
+    assert sum(c[0] == "delete" and c[1] == "created-2" for c in client.calls) == 1
+
+
+@pytest.mark.parametrize("code,status", [("permission_denied", 403), ("authentication_required", 401),
+                                         ("network_error", None), ("graph_error", 404)])
+def test_cleanup_read_errors_do_not_prove_absence(code, status):
+    class FailedTargetReadClient(FakeClient):
+        def call(self, *args):
+            if args[0] == "read" and args[1] not in self.events:
+                self.calls.append(args)
+                raise drill.DrillError("unverified", code=code, http_status=status)
+            return super().call(*args)
+    client = FailedTargetReadClient()
+    runner = drill.Drill(client, "test@example.com", True)
+    result = runner.run()
+    assert not result["ok"]
+    assert result["remaining_ids"] == ["created-1", "created-2"]
+    assert all(c["status"] == "unverified" for c in result["deletion_checks"])
+    runner.cleanup()
+    assert [c[1] for c in client.calls if c[0] == "delete"] == ["created-2", "created-1"]
+
+
+def test_cleanup_detects_incorrect_series_flag():
+    class WrongScopeClient(FakeClient):
+        def call(self, *args):
+            result = super().call(*args)
+            if args[0] == "delete":
+                result["series"] = not result["series"]
+            return result
+    result = drill.Drill(WrongScopeClient(), "test@example.com", True).run()
+    assert not result["ok"]
+    assert any("scope differs" in error for error in result["errors"])
+
+
+def test_cli_preserves_structured_not_found_metadata(monkeypatch):
+    def run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1, json.dumps({
+            "error": "localized message", "exit": 1, "code": "event_not_found", "http_status": 404}), "")
+    monkeypatch.setattr(drill.subprocess, "run", run)
+    with pytest.raises(drill.DrillError) as error:
+        drill.CalendarClient().call("read", "MASTER")
+    assert error.value.code == "event_not_found" and error.value.http_status == 404

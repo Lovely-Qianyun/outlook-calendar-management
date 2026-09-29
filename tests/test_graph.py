@@ -280,3 +280,48 @@ class TestGetAll:
         items = g._get_all("/me/events", "tk")
         assert len(items) == 200  # 防御上限
         assert len(calls) == 200
+
+
+@pytest.mark.parametrize("method", ["POST", "PATCH", "DELETE"])
+def test_uncertain_write_metadata_survives_network_failure(fake_request, method):
+    exc = g.requests.exceptions.Timeout("response lost")
+    attempts = 3 if method == "DELETE" else 1
+    state = fake_request([], raiser=[exc] * attempts)
+    with pytest.raises(CalError) as error:
+        g._call(method, "/me/events/E1", "tk")
+    assert error.value.to_dict()["code"] == "network_error"
+    assert error.value.to_dict()["outcome_unknown"] is True
+    assert len(state["calls"]) == attempts
+
+
+@pytest.mark.parametrize("method", ["POST", "PATCH"])
+@pytest.mark.parametrize("status", [500, 503])
+def test_server_failure_does_not_declare_write_failed(fake_request, method, status):
+    state = fake_request([Resp(status=status, text="server error")])
+    with pytest.raises(CalError) as error:
+        g._call(method, "/me/events/E1", "tk")
+    assert error.value.http_status == status
+    assert error.value.outcome_unknown is True
+    assert len(state["calls"]) == 1
+
+
+@pytest.mark.parametrize("method", ["GET", "POST", "PATCH"])
+def test_invalid_success_json_is_a_structured_error_without_resubmission(fake_request, method):
+    state = fake_request([Resp(status=200, text="broken JSON")])
+    with pytest.raises(CalError) as error:
+        g._call(method, "/me/events/E1", "tk")
+    assert error.value.code == "invalid_response"
+    assert error.value.http_status == 200
+    assert error.value.outcome_unknown is (True if method != "GET" else None)
+    assert len(state["calls"]) == 1
+
+
+def test_delete_retry_keeps_uncertainty_when_later_response_is_not_found(fake_request):
+    exc = g.requests.exceptions.Timeout("delete acknowledgement lost")
+    state = fake_request([None, Resp(status=404, payload={"error": {"code": "ErrorItemNotFound"}})],
+                         raiser=[exc])
+    with pytest.raises(CalError) as error:
+        g._call("DELETE", "/me/events/E1", "tk")
+    assert error.value.code == "event_not_found"
+    assert error.value.outcome_unknown is True
+    assert len(state["calls"]) == 2

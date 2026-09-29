@@ -1,6 +1,28 @@
 # 开发者指南
 
-本文说明执行契约和重构时需要保留的实现语义。模型操作指南见 [SKILL.zh-CN.md](SKILL.zh-CN.md)，完整接口见[命令参考](references/commands.zh-CN.md)。
+用于维护日历 CLI、skill 指令和测试。用户安装与使用入口见 [README](README.zh-CN.md)，本页说明如何验证修改及定位实现。
+
+## 一次请求如何完成
+
+例如，用户在周一要求“本周五 15:00 开半小时会”：助手用 `context` 确定时区和本周一日期，按四天偏移计算周五，再向 `add` 传入明确起止。CLI 校验时间、构造事件并调用 Graph，返回事件 JSON；助手读取结果核对日期、时段和其他要求。事件存入 Outlook，查询与操作结果输出到终端。
+
+## 验证
+
+在项目根目录安装依赖并运行：
+
+```bash
+python -m pip install pytest requests msal tzdata
+python -m pytest tests/ -q
+python -m compileall -q scripts
+```
+
+离线测试模拟网络和认证，覆盖严格日期、显式时区传播与恢复、DST 拒绝、重复结构、查询边界、日程操作、重试、Unicode JSON 和双语 key 完整性。CI 在 Linux、Windows、macOS 上使用 Python 3.10 和 3.13。
+
+模型级评估独立于单测：[触发评估](tests/trigger-eval.zh-CN.md)检查启用范围，[协议评估](tests/protocol-eval.zh-CN.md)检查信息提取，[skill 评估](tests/skill-eval.zh-CN.md)在全新会话的模拟日历中检查完整用户结果。按各评估文档记录实际结果。
+
+需要验证真实账户时，按[实机集成测试](tests/integration/README.zh-CN.md)单独运行；该流程会创建和清理真实日程。
+
+测试摘要显示在终端。需要机器可读报告时，使用 `python -m pytest tests/ -q --junitxml=test-results.xml`，结果保存在项目根目录的 `test-results.xml`；该报告由执行者按需生成。
 
 ## 职责边界
 
@@ -40,7 +62,7 @@
 5. 全天写入优先使用邮箱时区，取不到则用有效时区。CLI 结束日期包含当天，Graph 则保存次日零点作为不包含的结束。读取全天范围时不将日期经 UTC 换算。重复范围也使用最终日程的时区。
 6. 查询边界分别携带自己的偏移，包括跨夏令时的情况。Graph 时间可能含七位小数；截断精度时必须保留 `Z` 或数字时区后缀。
 
-## 需要保留的 Graph 行为
+## Graph 请求与恢复
 
 - 事件请求使用 `Prefer: IdType="ImmutableId"`，不可从标题或时间拼造 ID；写入 URL 路径的 ID 均需转义。
 - POST/PATCH 的网络错误可能发生在服务端已处理之后，不能盲目重试，应先查询服务端状态。GET/DELETE 可重试暂时性网络错误和 500/503；429 遵循 `Retry-After`，缺少该头时采用有上限的指数退避。
@@ -50,39 +72,18 @@
 - 修改/删除某次只作用于该次；修改系列规则须操作主事件，可能重置例外。规则更新会重建完整 range：两个结束选项均省略表示无截止，因此模型要保留原截止日期或次数时必须明确传入。
 - 冲突检查覆盖全天日程的完整日期范围及时段日程前后扩展窗口。`showAs=free` 和已取消事件不占用时间。个人账户不支持 `getSchedule`，因此 `free` 从事件在本地计算空闲段。
 - 关闭提醒写 `isReminderOn: false`，不能依赖分钟数置空。设置 `--remind` 同时打开 `isReminderOn`；单位取决于最终类型：时段按分钟，全天按天，全天上限 1826 天。
-- 邮箱时区读取需要 `MailboxSettings.Read`，权限不可用时回退有效时区。登录还申请 `Calendars.ReadWrite` 和 `User.Read`。
+- 邮箱时区读取需要 `MailboxSettings.Read`，权限不可用时回退有效时区。登录还申请 `Calendars.ReadWrite`；`status` 通过 `/me/calendar` 识别账户。
 - 凭据续期使用跨进程锁并重新检查存储内容，减少并发刷新和写入竞争。导入认证模块不能触发设备码交互。
 
 ## 输出与国际化
 
-模型优先使用 JSON。`--json` 下每次操作向 stdout 输出一个 JSON 值，诊断走 stderr。错误为 `{"error": ..., "exit": 1}` 且退出码非零；未连接的 `status` 保留连接状态对象。`--help` 是文本。JSON 采用 ASCII 转义，使 Unicode 经过 Windows GBK 管道后仍能被解码完整还原。
+模型优先使用 JSON。`--json` 下每次操作向 stdout 输出一个 JSON 值，诊断走 stderr。错误保留 `error`、`exit: 1` 且退出码非零；Graph/网络错误可附加稳定的 `code`、`http_status` 和 `outcome_unknown`，完整字段见[命令参考](references/commands.zh-CN.md)。写入超时、服务端错误及无法解析的成功响应标记结果不明；未连接的 `status` 保留连接状态对象。`--help` 是文本。JSON 采用 ASCII 转义，使 Unicode 经过 Windows GBK 管道后仍能被解码完整还原。
 
 人类输出仍由结构测试覆盖：结果 🆔 行在列表中缩进四格、add 中三格、read 中顶格；read 用 🆕 加冒号表示系列主 ID。空闲段格式为 `HH:MM-HH:MM`；没有列出时段本身无法区分全忙和全空闲，应使用 JSON。冲突警告可能包含已有事件 ID，应放在 stderr。文本模式的交互确认仍在 stdout。
 
 面向用户的文案通过 `ocal_i18n.t()`。语言优先级为 `--lang` → `OCAL_LANG` → 系统探测。两种语言表都要填全；锚点和 JSON key 与语言无关，译文不是解析契约。窄编码文本管道会替换不支持的 emoji，这种情况下不要依赖 emoji 提取。
 
-文档按英文默认文件名与中文 `.zh-CN` 成对维护；两个 SKILL 文件保留相同的英文 frontmatter description 和版本。版本采用 x.y.z：不兼容契约升主版本，新行为升次版本，维护升补丁版本。行为改变时同步示例和断言，不为兼容而保留过时接口别名。
-
-## 验证
-
-安装依赖与 pytest 后，在项目根目录运行：
-
-```bash
-python -m pytest tests/ -q
-python -m compileall -q scripts
-```
-
-离线测试模拟网络和认证，覆盖严格日期、显式时区传播与恢复、DST 拒绝、重复结构、查询边界、日程操作、重试、Unicode JSON 和双语 key 完整性。CI 在 Linux、Windows、macOS 上使用 Python 3.10 和 3.13。
-
-模型级评估独立于单测：[触发评估](tests/trigger-eval.zh-CN.md)检查启用范围，[协议评估](tests/protocol-eval.zh-CN.md)检查信息提取，[skill 评估](tests/skill-eval.zh-CN.md)在全新会话的模拟日历中检查完整用户结果。记录实际运行；评测文档存在不代表场景已经通过。
-
-可选的[实机演练](tests/integration/README.zh-CN.md)使用 `tests/integration/drill.py`，针对明确指定的已连接账户：
-
-```bash
-python tests/integration/drill.py --account <预期账户邮箱> --confirm
-```
-
-演练创建临时测试日程，仅清理本次创建时记录的 ID，不清空账户，也不按标题搜索删除目标。实机入口校验账户并要求显式确认参数。这会产生真实写入，与日常离线验证分开；运行前阅读其 README。
+文档按英文默认文件名与中文 `.zh-CN` 成对维护；两个 SKILL 文件保留相同的英文 frontmatter description 和版本。版本采用 x.y.z：不兼容契约升主版本，新行为升次版本，维护升补丁版本。行为改变时同步示例和断言。
 
 ## API 参考
 
